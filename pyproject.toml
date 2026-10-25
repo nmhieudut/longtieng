@@ -1,0 +1,23 @@
+[project]
+name = "longtieng"
+version = "0.1.0"
+description = "Web app lồng tiếng video cá nhân (Trung → Việt)"
+requires-python = ">=3.12"
+dependencies = [
+    "deep-translator>=1.11.4",
+    "edge-tts>=7.3.1",
+    "fastapi>=0.162.0",
+    "mlx-whisper>=0.4.3",
+    "numpy>=2.5.4",
+    "openai>=3.37.0",
+    "opencc-python-reimplemented>=0.1.7",
+    "python-dotenv>=1.2.4",
+    "python-multipart>=0.0.32",
+    "soundfile>=0.14.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.optional-dependencies]
+demucs = [
+    "demucs>=4.0.1",
+]
