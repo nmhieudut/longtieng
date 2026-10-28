@@ -158,15 +158,18 @@ def _rewrite(pid: str):
     store.update(pid, fin)
 
 
-def apply_mask_detection(pid: str, found: dict | None) -> dict:
+def apply_mask_detection(pid: str, found: dict | None, force: bool = False) -> dict:
+    """force: the user pressed "Dò tự động". Otherwise a band they set by hand meanwhile wins."""
     def fn(q):
         m = q["settings"]["mask"]
+        q["mask_detect"] = {"found": bool(found), **(found or {})}
+        if not force and not m.get("auto", True):
+            return
         m["auto"] = True
         if found:
             m.update(enabled=True, bottom=found["bottom"], height=found["height"])
         else:
             m["enabled"] = False
-        q["mask_detect"] = {"found": bool(found), **(found or {})}
     return store.update(pid, fn)
 
 

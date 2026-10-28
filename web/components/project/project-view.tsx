@@ -231,7 +231,8 @@ export function ProjectView({ id }: { id: string }) {
                 settings={p.settings}
                 voices={cfg?.voices ?? {}}
                 canDemucs={cfg?.features.demucs ?? false}
-                disabled={busy}
+                disabled={busy && RENDER_STAGES.includes(p.status.stage)}
+                busy={busy}
                 onDraft={setDraft}
                 onSave={async (patch) => { await onSettings(patch); setDraft(null); }}
                 maskDetect={p.mask_detect}
@@ -266,3 +267,6 @@ function LoadingSkeleton() {
     </div>
   );
 }
+
+// settings are locked only while the export runs (it reads them); see app/main.py::patch_settings
+const RENDER_STAGES = ["dubbing", "separating", "rendering"];

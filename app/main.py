@@ -19,6 +19,7 @@ from .config import (
 
 ACTIVE = {"queued", "downloading", "extracting", "model", "transcribing", "detecting", "translating",
           "dubbing", "separating", "rendering"}
+RENDER_STAGES = {"dubbing", "separating", "rendering"}
 VIDEO_EXT = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
 ENUMS = {
     "lang": set(SOURCE_LANGS),
@@ -404,8 +405,11 @@ def retry(pid: str):
 
 @app.patch("/api/projects/{pid}/settings")
 def patch_settings(pid: str, settings: dict = Body(...)):
-    _load(pid)
-    _not_busy(pid)
+    p = _load(pid)
+    # the export reads the settings, so they're locked only while dubbing/exporting;
+    # during download/recognition/translation the look (logo, frame, subtitles, music) can still change
+    if jobs.busy(pid) and p["status"]["stage"] in RENDER_STAGES:
+        raise HTTPException(409, "Đang xuất video, đợi xong (hoặc bấm Huỷ) rồi đổi cài đặt.")
 
     def fn(p):
         merged = p["settings"] | {k: v for k, v in settings.items() if k != "mask"}
@@ -433,7 +437,7 @@ def detect_mask(pid: str):
         raise HTTPException(400, "Máy này không có Apple Vision để nhận dạng chữ.")
     found = ocr.detect(store.pdir(pid) / p["source"]["file"], p["segments"], p["media"]["duration"],
                        p.get("detected_lang") or p["settings"]["lang"])
-    jobs.apply_mask_detection(pid, found)
+    jobs.apply_mask_detection(pid, found, force=True)
     return _view(store.update(pid, lambda q: q.__setitem__("edited_at", time.time())))
 
 

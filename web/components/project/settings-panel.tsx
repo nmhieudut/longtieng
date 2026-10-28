@@ -27,7 +27,8 @@ type Props = {
   settings: Settings;
   voices: Record<string, VoiceInfo>;
   canDemucs: boolean;
-  disabled: boolean;
+  disabled: boolean;                            // export running: settings locked
+  busy: boolean;                                // any job running (download, recognition, translation, export)
   onDraft: (s: Settings) => void;              // live, for the mask overlay
   onSave: (patch: DeepPartial<Settings>) => Promise<void>;
   maskDetect?: Project["mask_detect"];
@@ -36,7 +37,7 @@ type Props = {
 
 export function SettingsPanel({
   projectId, previewAt, subStyles, reviewStyles, onRewrite,
-  settings, voices, canDemucs, disabled, onDraft, onSave, maskDetect, onDetect,
+  settings, voices, canDemucs, disabled, busy, onDraft, onSave, maskDetect, onDetect,
 }: Props) {
   const [detecting, setDetecting] = useState(false);
   const [still, setStill] = useState<string | null>(null);
@@ -109,7 +110,12 @@ export function SettingsPanel({
   return (
     <>
     <div className="flex flex-wrap gap-2 border-b px-4 py-3">
-      <Button size="sm" variant="secondary" disabled={stillBusy || disabled} onClick={showStill}>
+      {disabled && (
+        <p className="w-full rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+          Đang lồng tiếng / xuất video nên tạm khoá cài đặt. Đợi xong hoặc bấm Huỷ để chỉnh.
+        </p>
+      )}
+      <Button size="sm" variant="secondary" disabled={stillBusy} onClick={showStill}>
         {stillBusy ? <Loader2 className="animate-spin" /> : <Eye />} Xem ảnh khung hình xuất ra
       </Button>
       <Button size="sm" variant="ghost" onClick={saveDefaults} title="Áp dụng cho video mới">
@@ -136,7 +142,7 @@ export function SettingsPanel({
           show={(v) => `${v.toFixed(2)}×`} onChange={(v) => change({ rate: v })} />
       </Section>
 
-      <ScriptSection s={s} styles={reviewStyles} disabled={disabled} change={change} onRewrite={async () => { await flush(); await onRewrite(); }} />
+      <ScriptSection s={s} styles={reviewStyles} disabled={disabled} busy={busy} change={change} onRewrite={async () => { await flush(); await onRewrite(); }} />
 
       <Section value="audio" icon={<Music />} title="Âm thanh gốc"
         summary={s.audio_mode === "mute" ? "Tắt" : `${s.audio_mode === "duck" ? "Giảm nhỏ" : "Giữ nhạc nền"} · ${Math.round(s.orig_volume * 100)}%`}>
@@ -209,7 +215,7 @@ export function SettingsPanel({
             size="xs"
             variant="outline"
             className="ml-auto"
-            disabled={disabled || detecting}
+            disabled={busy || detecting}
             onClick={async () => { setDetecting(true); try { await onDetect(); } finally { setDetecting(false); } }}
           >
             {detecting ? <Loader2 className="animate-spin" /> : <ScanText />}

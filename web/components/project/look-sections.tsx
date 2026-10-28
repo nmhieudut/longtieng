@@ -75,7 +75,7 @@ export function SubStylePicker({ value, styles, disabled, onChange }: {
 }) {
   return (
     <Field label="Kiểu chữ">
-      <div className="grid grid-cols-2 gap-1.5">
+      <div className="grid grid-cols-2 gap-1.5 p-1">
         {Object.entries(styles).map(([k, label]) => (
           <button key={k} type="button" disabled={disabled} onClick={() => onChange(k)}
             className={cn("grid gap-1 rounded-lg border bg-[linear-gradient(135deg,#5b6b7a,#2f3b46)] p-2 text-left transition-colors disabled:opacity-60",
@@ -133,7 +133,7 @@ export function LogoSection({ s, disabled, change }: { s: Settings; disabled: bo
     <Section value="logo" icon={<Stamp />} title="Logo kênh"
       summary={current ? `${current.name} · ${CORNERS.find((c) => c.v === lg.position)?.label}` : lg.text ? lg.text : "Không"}>
       <Field label="Logo ảnh (PNG nền trong suốt đẹp nhất)">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 p-1">
           <button type="button" disabled={disabled} onClick={() => change({ logo: { image: null } })}
             className={cn("grid size-14 place-items-center rounded-lg border text-[11px] text-muted-foreground",
               !lg.image && "ring-2 ring-primary")}>Không</button>
@@ -189,8 +189,9 @@ export function LogoSection({ s, disabled, change }: { s: Settings; disabled: bo
 }
 
 /** Faithful translation or AI narration ("review") in a chosen style, plus "rewrite now". */
-export function ScriptSection({ s, styles, disabled, change, onRewrite }: {
-  s: Settings; styles: Record<string, string>; disabled: boolean; change: Change; onRewrite: () => Promise<void>;
+export function ScriptSection({ s, styles, disabled, busy: jobBusy, change, onRewrite }: {
+  s: Settings; styles: Record<string, string>; disabled: boolean; busy: boolean; change: Change;
+  onRewrite: () => Promise<void>;
 }) {
   const sc = s.script;
   const [busy, setBusy] = useState(false);
@@ -219,7 +220,8 @@ export function ScriptSection({ s, styles, disabled, change, onRewrite }: {
       </p>
       <AlertDialog>
         <AlertDialogTrigger asChild>
-          <Button variant="outline" disabled={disabled || busy} className="justify-self-start">
+          <Button variant="outline" disabled={jobBusy || busy} className="justify-self-start"
+            title={jobBusy ? "Đợi video xử lý xong" : undefined}>
             {busy ? <Loader2 className="animate-spin" /> : <Wand2 />} Viết lại lời thoại theo cài đặt này
           </Button>
         </AlertDialogTrigger>
