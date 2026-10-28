@@ -11,3 +11,4 @@ wheels/
 data/
 .env
 cookies*.txt
+.DS_Store
