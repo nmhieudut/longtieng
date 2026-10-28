@@ -1,10 +1,13 @@
 """Translate segments to Vietnamese: OpenAI first, Google as fallback."""
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .config import OPENAI_MODEL, VI_CHARS_PER_SEC, lang_info, openai_key
 
-BATCH = 40
+BATCH = 40          # review mode: runs one batch after another so the narration flows
+PAR_BATCH = 24      # faithful translation: small batches, several at once
+PAR_WORKERS = 4
 CONTEXT = 6
 
 SYSTEM = """Bạn là biên dịch viên lồng tiếng video ngắn (Douyin/TikTok/Reels) từ {src} sang tiếng Việt.
@@ -79,6 +82,39 @@ def translate_all(segs: list[dict], duration: float, src_lang: str, rate: float,
     return warnings
 
 
+def _ask(client, system: str, user: dict, want: set, temperature: float) -> dict:
+    """One batch → {id: text}. Tries twice if the model skipped some ids."""
+    got: dict = {}
+    for _attempt in range(2):
+        r = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
+            ],
+            response_format={"type": "json_object"},
+            temperature=temperature,
+        )
+        try:
+            data = json.loads(r.choices[0].message.content)
+            for it in data.get("items", []):
+                if it.get("id") in want and str(it.get("vi", "")).strip():
+                    got[it["id"]] = str(it["vi"]).strip()
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pass
+        if want <= got.keys():
+            break
+    return got
+
+
+def _items(segs, duration, rate, rng):
+    return [{
+        "id": segs[i]["id"],
+        "text": segs[i]["src"],
+        "max_chars": budget(available_secs(segs, i, duration), rate),
+    } for i in rng]
+
+
 def _openai(segs, duration, rate, src_lang, on_progress, script=None):
     from openai import OpenAI
 
@@ -87,38 +123,42 @@ def _openai(segs, duration, rate, src_lang, on_progress, script=None):
     if script:
         style = REVIEW_STYLES.get(script.get("style"), REVIEW_STYLES["drama"])[1]
         system = REVIEW_SYSTEM.format(src=info["name"], style=style, names=info["names"])
-    else:
-        system = SYSTEM.replace("{src}", info["name"]).replace("{names}", info["names"])
+        return _openai_narrate(client, system, segs, duration, rate, on_progress)
+    system = SYSTEM.replace("{src}", info["name"]).replace("{names}", info["names"])
+
+    # Batches don't depend on each other (context is the neighbouring *source* lines), so run them together.
+    ranges = [range(b, min(b + PAR_BATCH, len(segs))) for b in range(0, len(segs), PAR_BATCH)]
+
+    def job(rng):
+        a, z = rng.start, rng.stop
+        user = {"context_before": [segs[i]["src"] for i in range(max(0, a - CONTEXT), a)],
+                "context_after": [segs[i]["src"] for i in range(z, min(len(segs), z + 2))],
+                "items": _items(segs, duration, rate, rng)}
+        return rng, _ask(client, system, user, {x["id"] for x in user["items"]}, 0.3)
+
+    pool = ThreadPoolExecutor(max_workers=min(PAR_WORKERS, len(ranges)))
+    try:
+        futures = [pool.submit(job, r) for r in ranges]
+        done = 0
+        for f in as_completed(futures):
+            rng, got = f.result()
+            for i in rng:
+                segs[i]["vi"] = got.get(segs[i]["id"], "")
+            done += 1
+            if on_progress:
+                on_progress(done / len(ranges))  # from this thread, so a cancel raised here stops the job
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _openai_narrate(client, system, segs, duration, rate, on_progress):
+    """Review mode: each batch continues from the narration written so far, so it runs in order."""
     done_ctx: list[str] = []
     for b in range(0, len(segs), BATCH):
         chunk = range(b, min(b + BATCH, len(segs)))
-        items = [{
-            "id": segs[i]["id"],
-            "text": segs[i]["src"],
-            "max_chars": budget(available_secs(segs, i, duration), rate),
-        } for i in chunk]
+        items = _items(segs, duration, rate, chunk)
         user = {"context_before": done_ctx[-CONTEXT:], "items": items}
-        want = {s["id"] for s in items}
-        got = {}
-        for _attempt in range(2):
-            r = client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.75 if script else 0.3,
-            )
-            try:
-                data = json.loads(r.choices[0].message.content)
-                for it in data.get("items", []):
-                    if it.get("id") in want and str(it.get("vi", "")).strip():
-                        got[it["id"]] = str(it["vi"]).strip()
-            except (json.JSONDecodeError, TypeError, AttributeError):
-                pass
-            if want <= got.keys():
-                break
+        got = _ask(client, system, user, {x["id"] for x in items}, 0.75)
         for i in chunk:
             segs[i]["vi"] = got.get(segs[i]["id"], "")
             if segs[i]["vi"]:
@@ -144,13 +184,22 @@ def _google(segs, idxs, src_lang, on_progress=None):
     import time
 
     src = lang_info(src_lang)["google"]
-    for n, i in enumerate(idxs):
+
+    def one(i):
         for attempt in range(3):
             try:
                 segs[i]["vi"] = _gtx(segs[i]["src"], src)
-                break
+                return
             except Exception:
                 time.sleep(1.5 * (attempt + 1))
-        if on_progress:
-            on_progress((n + 1) / len(idxs))
-        time.sleep(0.15)
+
+    # a few at a time: much faster than one by one, still gentle enough not to get blocked
+    pool = ThreadPoolExecutor(max_workers=5)
+    try:
+        futures = [pool.submit(one, i) for i in idxs]
+        for n, f in enumerate(as_completed(futures), 1):
+            f.result()
+            if on_progress:
+                on_progress(n / len(idxs))
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)

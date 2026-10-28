@@ -11,7 +11,7 @@ from .config import MAX_DURATION_MIN
 from .media import MediaError, download_url, extract_audio_16k, probe
 
 heavy = ThreadPoolExecutor(max_workers=1, thread_name_prefix="heavy")
-light = ThreadPoolExecutor(max_workers=4, thread_name_prefix="light")
+light = ThreadPoolExecutor(max_workers=6, thread_name_prefix="light")
 _queued: set[str] = set()
 
 
@@ -106,15 +106,27 @@ def _prepare(pid: str):
     if not segs:
         raise MediaError("Không nhận dạng được câu thoại nào trong video.")
 
+    # Looking for burned-in subtitles (local, CPU/GPU) and translating (network) don't need each
+    # other, so do both at once.
+    finder = None
     if p["settings"]["mask"].get("auto", True) and ocr.available():
-        step(pid, "detecting", None, "Đang dò phụ đề gốc có sẵn trên video…")
-        apply_mask_detection(pid, ocr.detect(src, segs, media["duration"], lang))
+        def find():
+            cancel.bind(pid)
+            return ocr.detect(src, segs, media["duration"], lang)
+        finder = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr")
+        found_future = finder.submit(find)
 
     step(pid, "translating", 0, f"Đang dịch {len(segs)} câu…")
-    warnings = translate.translate_all(
-        segs, media["duration"], lang, p["settings"]["rate"],
-        lambda x: step(pid, "translating", x, f"Đang dịch {len(segs)} câu…"),
-        script=p["settings"].get("script"))
+    try:
+        warnings = translate.translate_all(
+            segs, media["duration"], lang, p["settings"]["rate"],
+            lambda x: step(pid, "translating", x, f"Đang dịch {len(segs)} câu…"),
+            script=p["settings"].get("script"))
+        if finder:
+            apply_mask_detection(pid, found_future.result())
+    finally:
+        if finder:
+            finder.shutdown(wait=False)
 
     for i, s in enumerate(segs):
         s["fit"] = dub.estimate(s["vi"], dub.slot(segs, i, media["duration"]), p["settings"]["rate"])

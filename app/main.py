@@ -638,5 +638,7 @@ def web(path: str):
     for cand in ([p, f"{p}.html", f"{p}/index.html"] if p else ["index.html"]):
         f = (root / cand).resolve()
         if f.is_relative_to(root) and f.is_file():
-            return FileResponse(f)
-    return FileResponse(root / "404.html", status_code=404)
+            # always revalidate: the web view keeps its cache between runs, so without this it can
+            # keep showing the UI of an older version after an update or reinstall
+            return FileResponse(f, headers={"Cache-Control": "no-cache"})
+    return FileResponse(root / "404.html", status_code=404, headers={"Cache-Control": "no-cache"})
