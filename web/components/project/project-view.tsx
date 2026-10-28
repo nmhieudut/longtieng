@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Languages, SlidersHorizontal } from "lucide-react";
+import { ArrowLeft, Languages, Send, SlidersHorizontal, WifiOff } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -13,17 +13,19 @@ import { api, type Config, type DeepPartial, fileUrl, isActive, type Project, ty
 import { SegmentList } from "./segment-list";
 import { SettingsPanel } from "./settings-panel";
 import { StageBadge } from "./stage-badge";
-import { StatusPanel } from "./status-panel";
+import { ExportPanel } from "./export-panel";
 import { Steps } from "./steps";
 import { useProject } from "./use-project";
+import { PublishPanel } from "./publish-panel";
 import { VideoPanel, type VideoView } from "./video-panel";
 
 export function ProjectView({ id }: { id: string }) {
-  const { project: p, error, apply } = useProject(id);
+  const { project: p, error, apply, offline } = useProject(id);
   const [cfg, setCfg] = useState<Config | null>(null);
   const [view, setView] = useState<VideoView>("source");
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [tab, setTab] = useState("lines");
   const [draft, setDraft] = useState<Settings | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pendingShow = useRef<"preview" | "final" | null>(null);
@@ -146,6 +148,12 @@ export function ProjectView({ id }: { id: string }) {
 
   return (
     <div className="grid gap-5">
+      {offline && (
+        <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          <WifiOff className="size-4 shrink-0" />
+          Mất kết nối tới server. Kiểm tra server còn chạy không (uv run python -m app). Trang sẽ tự kết nối lại.
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
         <Link href="/" aria-label="Về danh sách" className="grid size-8 place-items-center rounded-lg border bg-background hover:bg-muted">
           <ArrowLeft className="size-4" />
@@ -174,21 +182,32 @@ export function ProjectView({ id }: { id: string }) {
               onLoaded={onLoaded}
             />
           </Card>
-          <StatusPanel
+          <ExportPanel
             project={p}
             previewAt={previewAt}
             onRetry={() => run(() => api.retry(id))}
+            onCancel={() => run(() => api.cancel(id))}
             onPreview={() => { pendingShow.current = "preview"; run(() => api.render(id, previewAt)); }}
             onRender={() => { pendingShow.current = "final"; run(() => api.render(id, null)); }}
+            onJump={(i) => {
+              setTab("lines");
+              seek(p.segments[i].start + 0.01);
+              setTimeout(() => {
+                const row = document.querySelector<HTMLElement>(`[data-idx="${i}"]`);
+                row?.scrollIntoView({ block: "center", behavior: "smooth" });
+                row?.querySelector("textarea")?.focus({ preventScroll: true });
+              }, 60);
+            }}
           />
         </div>
 
         <Card className="min-w-0 gap-0 overflow-hidden p-0 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)]">
-          <Tabs defaultValue="lines" className="flex min-h-0 flex-1 flex-col gap-0">
+          <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col gap-0">
             <div className="border-b px-4 py-3">
               <TabsList className="w-full sm:w-auto">
                 <TabsTrigger value="lines"><Languages /> Bản dịch{p.segments.length ? ` (${p.segments.length})` : ""}</TabsTrigger>
                 <TabsTrigger value="settings"><SlidersHorizontal /> Cài đặt</TabsTrigger>
+                <TabsTrigger value="publish"><Send /> Đăng Reels</TabsTrigger>
               </TabsList>
             </div>
             <TabsContent value="lines" className="min-h-0 flex-1 overflow-y-auto">
@@ -209,7 +228,19 @@ export function ProjectView({ id }: { id: string }) {
                 disabled={busy}
                 onDraft={setDraft}
                 onSave={async (patch) => { await onSettings(patch); setDraft(null); }}
+                maskDetect={p.mask_detect}
+                onDetect={async () => {
+                  await run(async () => {
+                    const np = await api.detectMask(id);
+                    toast.success(np.mask_detect?.found ? "Đã tìm thấy và che vùng phụ đề Trung." : "Không thấy phụ đề Trung trên video.");
+                    return np;
+                  });
+                  setDraft(null);
+                }}
               />
+            </TabsContent>
+            <TabsContent value="publish" className="min-h-0 flex-1 overflow-y-auto">
+              <PublishPanel project={p} time={view === "preview" ? 0 : time} apply={apply} />
             </TabsContent>
           </Tabs>
         </Card>

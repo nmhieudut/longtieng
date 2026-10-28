@@ -1,19 +1,21 @@
 """FastAPI server: JSON API + static UI. Run with `uv run python -m app`."""
 
 import json
-import shutil
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from . import dub, jobs, store
+from . import dub, jobs, music, ocr, publish, store
+from .media import MediaError
 from .config import (
-    DEFAULT_SETTINGS, MAX_DURATION_MIN, MAX_UPLOAD_MB, OPENAI_API_KEY, OPENAI_MODEL, VOICES, WEB_DIR,
+    DATA_DIR, DEFAULT_SETTINGS, MAX_DURATION_MIN, MAX_UPLOAD_MB, OPENAI_API_KEY, OPENAI_MODEL, VOICES, WEB_DIR,
 )
 
-ACTIVE = {"queued", "downloading", "extracting", "model", "transcribing", "translating",
+ACTIVE = {"queued", "downloading", "extracting", "model", "transcribing", "detecting", "translating",
           "dubbing", "separating", "rendering"}
 VIDEO_EXT = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
 ENUMS = {
@@ -24,8 +26,27 @@ ENUMS = {
 }
 
 
+def _kill_orphans():
+    """ffmpeg/yt-dlp/demucs started by a previous server process keep running after it dies."""
+    import os
+    import signal
+    import subprocess as sp
+
+    r = sp.run(["pgrep", "-f", str(DATA_DIR)], capture_output=True, text=True)
+    for line in r.stdout.split():
+        try:
+            pid = int(line)
+            if pid != os.getpid():
+                os.kill(pid, signal.SIGKILL)
+        except (ValueError, ProcessLookupError, PermissionError):
+            pass
+    for f in DATA_DIR.glob("*/out/*.part.*"):
+        f.unlink(missing_ok=True)
+
+
 def _recover():
     """Jobs live in memory; after a restart nothing is running any more."""
+    _kill_orphans()
     for p in store.list_all():
         if p["status"]["stage"] in ACTIVE:
             if p["segments"]:
@@ -35,9 +56,20 @@ def _recover():
                                  error="Bị dừng do server khởi động lại. Bấm Thử lại.")
 
 
+def _warm_samples():
+    for v in VOICES:
+        try:
+            voice_sample(v)
+        except Exception:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(_app):
     _recover()
+    _drop_track()
+    # make "▶ nghe thử" instant: build every voice's demo clip in the background
+    threading.Thread(target=_warm_samples, daemon=True).start()
     yield
 
 
@@ -59,7 +91,8 @@ def _not_busy(pid: str):
 
 
 def _view(p: dict) -> dict:
-    return p | {"busy": jobs.busy(p["id"])}
+    # projects made by older versions lack newer settings keys
+    return p | {"settings": store.clean_settings(p["settings"]), "busy": jobs.busy(p["id"])}
 
 
 def _check_settings(s: dict) -> dict:
@@ -71,6 +104,9 @@ def _check_settings(s: dict) -> dict:
     m = s.get("mask")
     if isinstance(m, dict) and "style" in m and m["style"] not in {"blur", "box"}:
         raise HTTPException(400, "Kiểu che phụ đề không hợp lệ.")
+    mu = s.get("music")
+    if isinstance(mu, dict) and mu.get("track") and not music.get(str(mu["track"])):
+        raise HTTPException(400, "Bài nhạc không còn trong thư viện.")
     try:
         return store.clean_settings(s)
     except (TypeError, ValueError):
@@ -99,6 +135,69 @@ def config():
         "max_duration_min": MAX_DURATION_MIN,
         "translator": f"OpenAI ({OPENAI_MODEL})" if OPENAI_API_KEY else "Google Dịch (chưa có OPENAI_API_KEY)",
     }
+
+
+# ---------- shared background-music library
+
+@app.get("/api/music")
+def music_list():
+    return music.list_all()
+
+
+@app.post("/api/music")
+def music_upload(file: UploadFile = File(...)):
+    try:
+        return music.add(file.filename or "Nhạc", Path(file.filename or "").suffix, file.file)
+    except MediaError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/music/{mid}")
+def music_delete(mid: str):
+    if not music.delete(mid):
+        raise HTTPException(404, "Không có bài nhạc này.")
+    _drop_track(mid)
+    return {"ok": True}
+
+
+def _drop_track(mid: str | None = None):
+    """Unset a deleted track (or, with no id, any track missing from the library) in every project."""
+    for summary in store.list_all():
+        pid = summary["id"]
+        tid = (store.load(pid)["settings"].get("music") or {}).get("track")
+        if tid and (tid == mid or (mid is None and not music.get(tid))):
+            store.update(pid, lambda q: q["settings"]["music"].__setitem__("track", None))
+
+
+@app.get("/api/music/{mid}/file")
+def music_file(mid: str):
+    m = music.get(mid)
+    if not m or not music.path(m).exists():
+        raise HTTPException(404, "Không có bài nhạc này.")
+    return FileResponse(music.path(m), headers={"Cache-Control": "max-age=86400"})
+
+
+SAMPLE_TEXT = ("Xin chào các bạn! Hôm nay mình sẽ hướng dẫn mọi người làm món trứng chiên "
+               "siêu ngon và đơn giản ngay tại nhà nhé.")
+_sample_locks: dict[str, threading.Lock] = {}
+
+
+@app.get("/api/voices/{voice}/sample")
+def voice_sample(voice: str):
+    """Short demo clip per voice, generated once and cached."""
+    if voice not in VOICES:
+        raise HTTPException(404, "Không có giọng này.")
+    out = DATA_DIR.parent / "voice_samples" / f"{voice.replace(':', '_')}.mp3"
+    with _sample_locks.setdefault(voice, threading.Lock()):
+        if not out.exists():
+            out.parent.mkdir(parents=True, exist_ok=True)
+            tmp = out.with_suffix(".tmp.mp3")
+            try:
+                dub.synth(SAMPLE_TEXT, voice, 1.0, tmp)
+            except RuntimeError as e:
+                raise HTTPException(502, str(e))
+            tmp.replace(out)
+    return FileResponse(out, media_type="audio/mpeg", headers={"Cache-Control": "max-age=86400"})
 
 
 @app.get("/api/projects")
@@ -158,6 +257,17 @@ def delete_project(pid: str):
     return {"ok": True}
 
 
+@app.post("/api/projects/{pid}/cancel")
+def cancel_job(pid: str):
+    p = _load(pid)
+    if not jobs.busy(pid):
+        raise HTTPException(400, "Không có việc nào đang chạy.")
+    jobs.request_cancel(pid)
+    st = p["status"]
+    store.set_status(pid, st["stage"], st.get("progress"), "Đang huỷ…")
+    return _view(store.load(pid))
+
+
 @app.post("/api/projects/{pid}/retry")
 def retry(pid: str):
     p = _load(pid)
@@ -176,10 +286,87 @@ def patch_settings(pid: str, settings: dict = Body(...)):
 
     def fn(p):
         merged = p["settings"] | {k: v for k, v in settings.items() if k != "mask"}
-        merged["mask"] = p["settings"]["mask"] | (settings.get("mask") or {})
-        p["settings"] = _check_settings(merged)
+        mask_patch = settings.get("mask") or {}
+        merged["mask"] = p["settings"]["mask"] | mask_patch
+        merged["music"] = (p["settings"].get("music") or {}) | (settings.get("music") or {})
+        if set(mask_patch) & {"enabled", "bottom", "height"}:
+            merged["mask"]["auto"] = False  # the user took over
+        new = _check_settings(merged)
+        if new != store.clean_settings(p["settings"]):
+            p["edited_at"] = time.time()  # the exported video no longer matches
+        p["settings"] = new
         _refit(p)
     return _view(store.update(pid, fn))
+
+
+@app.post("/api/projects/{pid}/detect-mask")
+def detect_mask(pid: str):
+    p = _load(pid)
+    _not_busy(pid)
+    if not p.get("media") or not p["source"].get("file"):
+        raise HTTPException(400, "Video chưa sẵn sàng.")
+    if not ocr.available():
+        raise HTTPException(400, "Máy này không có Apple Vision để nhận dạng chữ.")
+    found = ocr.detect(store.pdir(pid) / p["source"]["file"], p["segments"], p["media"]["duration"])
+    jobs.apply_mask_detection(pid, found)
+    return _view(store.update(pid, lambda q: q.__setitem__("edited_at", time.time())))
+
+
+# ---------- Facebook Reels kit
+
+def _ready(pid: str) -> dict:
+    p = _load(pid)
+    if not p.get("media") or not p["source"].get("file"):
+        raise HTTPException(400, "Video chưa sẵn sàng.")
+    return p
+
+
+@app.post("/api/projects/{pid}/caption")
+def make_caption(pid: str):
+    p = _ready(pid)
+    if not any(s["vi"].strip() for s in p["segments"]):
+        raise HTTPException(400, "Chưa có bản dịch để viết caption.")
+    try:
+        cap = publish.make_caption(p)
+    except MediaError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"OpenAI lỗi: {type(e).__name__}: {str(e)[:200]}")
+    return _view(store.update(pid, lambda q: q.setdefault("publish", {}).__setitem__("caption", cap)))
+
+
+@app.patch("/api/projects/{pid}/caption")
+def edit_caption(pid: str, title: str = Body(""), description: str = Body(""), hashtags: list[str] = Body([])):
+    _ready(pid)
+    cap = {"title": title.strip()[:150], "description": description.strip()[:1000],
+           "hashtags": [h.strip() for h in hashtags if h.strip()][:20]}
+    return _view(store.update(pid, lambda q: q.setdefault("publish", {}).__setitem__("caption", cap)))
+
+
+@app.post("/api/projects/{pid}/thumb-candidates")
+def thumb_candidates(pid: str):
+    p = _ready(pid)
+    try:
+        cands = publish.candidates(store.pdir(pid), p)
+    except MediaError as e:
+        raise HTTPException(500, str(e))
+    stamp = time.time()
+    return _view(store.update(pid, lambda q: q.setdefault("publish", {}).__setitem__(
+        "candidates", [c | {"at": stamp} for c in cands])))
+
+
+@app.post("/api/projects/{pid}/cover")
+def make_cover(pid: str, t: float = Body(...), title: str = Body(""), position: str = Body("top")):
+    p = _ready(pid)
+    if position not in {"top", "middle", "bottom"}:
+        raise HTTPException(400, "Vị trí không hợp lệ.")
+    t = min(max(0.0, float(t)), max(0.0, p["media"]["duration"] - 0.1))
+    try:
+        publish.cover(store.pdir(pid), p, t, title[:150], position)
+    except MediaError as e:
+        raise HTTPException(500, str(e))
+    info = {"t": round(t, 2), "title": title[:150], "position": position, "file": "thumbs/cover.jpg", "at": time.time()}
+    return _view(store.update(pid, lambda q: q.setdefault("publish", {}).__setitem__("cover", info)))
 
 
 @app.patch("/api/projects/{pid}/segments/{sid}")
@@ -192,8 +379,9 @@ def patch_segment(pid: str, sid: int, vi: str = Body(..., embed=True)):
 
     def fn(q):
         for s in q["segments"]:
-            if s["id"] == sid:
+            if s["id"] == sid and s["vi"] != vi:
                 s["vi"] = vi
+                q["edited_at"] = time.time()
         _refit(q)
     return _view(store.update(pid, fn))
 
@@ -208,7 +396,8 @@ def segment_tts(pid: str, sid: int):
     if not seg["vi"].strip():
         raise HTTPException(400, "Câu này chưa có bản dịch.")
     try:
-        return _view(jobs.line_tts(pid, sid))
+        jobs.line_tts(pid, sid)
+        return _view(store.update(pid, lambda q: q.__setitem__("edited_at", time.time())))
     except RuntimeError as e:
         raise HTTPException(502, str(e))
 

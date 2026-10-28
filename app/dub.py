@@ -1,6 +1,8 @@
 """TTS per line, fit each line into its time slot, and mix the dub track."""
 
 import asyncio
+import hashlib
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -9,7 +11,10 @@ import edge_tts
 import numpy as np
 import soundfile as sf
 
-from .config import MAX_ATEMPO, MAX_EDGE_SPEEDUP, SAMPLE_RATE, VI_CHARS_PER_SEC
+from .config import (
+    DATA_DIR, FFMPEG, MAX_ATEMPO, MAX_EDGE_SPEEDUP,
+    OPENAI_API_KEY, OPENAI_TTS_MODEL, SAMPLE_RATE, VI_CHARS_PER_SEC,
+)
 from .media import decode_mono, trim_silence
 
 _edge_sem = threading.Semaphore(4)  # edge-tts is an unofficial endpoint; be gentle
@@ -46,9 +51,86 @@ def _rate_str(r: float) -> str:
     return f"{round((r - 1) * 100):+d}%"
 
 
+_OPENAI_TTS_INSTRUCTIONS = ("Đọc bằng tiếng Việt chuẩn như người Việt bản xứ, tự nhiên, rõ ràng, "
+                            "giọng lồng tiếng video ngắn, không đọc quá chậm.")
+_openai_client = None
+
+
+def _synth_openai(text: str, name: str, rate: float, out: Path) -> None:
+    global _openai_client
+    from openai import OpenAI
+
+    if _openai_client is None:
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY, max_retries=2, timeout=60)
+    r = _openai_client.audio.speech.create(
+        model=OPENAI_TTS_MODEL, voice=name, input=text, instructions=_OPENAI_TTS_INSTRUCTIONS,
+        response_format="mp3", speed=min(4.0, max(0.25, rate)))
+    out.write_bytes(r.content)
+
+
+# Engines without a speed setting: fetch once at 1.0x (cached, so speed-up retries cost nothing),
+# then change the tempo with ffmpeg.
+_CACHE = DATA_DIR.parent / "tts_cache"
+
+
+def _cached(engine: str, voice: str, text: str, make) -> Path:
+    key = hashlib.sha1(f"{voice}|{text}".encode()).hexdigest()
+    p = _CACHE / engine / f"{key}.mp3"
+    if not p.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(f".{threading.get_ident()}.tmp")
+        make(tmp)
+        tmp.replace(p)
+    return p
+
+
+def _tempo(src: Path, rate: float, out: Path) -> None:
+    if abs(rate - 1.0) < 0.005:
+        out.write_bytes(src.read_bytes())
+        return
+    filters, r = [], rate
+    while r > 2.0:
+        filters.append("atempo=2.0")
+        r /= 2.0
+    filters.append(f"atempo={r:.4f}")
+    res = subprocess.run([FFMPEG, "-y", "-v", "error", "-i", str(src), "-filter:a", ",".join(filters), str(out)],
+                         capture_output=True, text=True, timeout=60)
+    if res.returncode != 0:
+        raise RuntimeError("ffmpeg atempo lỗi: " + res.stderr[-300:])
+
+
+def _google_raw(text: str, out: Path) -> None:
+    from gtts import gTTS
+
+    gTTS(text, lang="vi", timeout=30).save(str(out))
+
+
 def _synth(text: str, voice: str, rate: float, out: Path) -> None:
+    if voice.startswith("google:"):
+        engine, make = "google", _google_raw
+        last = None
+        for attempt in range(3):
+            try:
+                base = _cached(engine, voice, text, lambda p: make(text, p))
+                return _tempo(base, rate, out)
+            except RuntimeError:
+                raise
+            except Exception as e:  # network hiccup
+                last = e
+                time.sleep(1.5 * (attempt + 1))
+        raise RuntimeError(f"Google TTS lỗi: {last}")
+    if voice.startswith("openai:"):
+        try:
+            return _synth_openai(text, voice.split(":", 1)[1], rate, out)
+        except Exception as e:
+            raise RuntimeError(f"OpenAI TTS lỗi: {type(e).__name__}: {str(e)[:200]}")
+
     async def go():
-        await edge_tts.Communicate(text, voice, rate=_rate_str(rate)).save(str(out))
+        # hard cap: a half-open websocket can stall forever despite edge-tts' own receive timeout
+        limit = 30 + len(text) / 10
+        await asyncio.wait_for(
+            edge_tts.Communicate(text, voice, rate=_rate_str(rate), connect_timeout=10, receive_timeout=20).save(str(out)),
+            timeout=limit)
 
     last = None
     for attempt in range(3):
@@ -62,6 +144,10 @@ def _synth(text: str, voice: str, rate: float, out: Path) -> None:
         except Exception as e:
             last = e
     raise RuntimeError(f"Edge TTS lỗi: {last}")
+
+
+def synth(text: str, voice: str, rate: float, out: Path) -> None:
+    _synth(text, voice, rate, out)
 
 
 def make_line(proj_dir: Path, seg: dict, slot_secs: float, voice: str, rate: float) -> dict:

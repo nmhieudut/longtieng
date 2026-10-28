@@ -114,12 +114,6 @@ def _google(segs, idxs, src_lang, on_progress=None):
                 break
             except Exception:
                 time.sleep(1.5 * (attempt + 1))
-        if not segs[i]["vi"]:
-            try:  # last resort
-                from deep_translator import GoogleTranslator
-                segs[i]["vi"] = (GoogleTranslator(source=src, target="vi").translate(segs[i]["src"]) or "").strip()
-            except Exception:
-                pass
         if on_progress:
             on_progress((n + 1) / len(idxs))
         time.sleep(0.15)

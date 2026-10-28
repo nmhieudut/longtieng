@@ -20,12 +20,18 @@ export type Settings = {
   subtitle_mode: "burn" | "srt" | "none";
   sub_size: number;
   sub_margin: number;
-  mask: { enabled: boolean; style: "blur" | "box"; bottom: number; height: number };
+  music: { track: string | null; volume: number; duck: boolean; start: number };
+  mask: { enabled: boolean; auto: boolean; style: "blur" | "box"; bottom: number; height: number };
 };
 
 export type Stage =
-  | "queued" | "downloading" | "extracting" | "model" | "transcribing" | "translating"
+  | "queued" | "downloading" | "extracting" | "model" | "transcribing" | "detecting" | "translating"
   | "review" | "dubbing" | "separating" | "rendering" | "done" | "error";
+
+export type Caption = { title: string; description: string; hashtags: string[] };
+export type CoverPos = "top" | "middle" | "bottom";
+
+export type MusicTrack = { id: string; name: string; file: string; duration: number };
 
 export type Output = { file: string; at?: number };
 
@@ -39,6 +45,12 @@ export type Project = {
   status: { stage: Stage; progress: number | null; message: string; error: string | null };
   warnings: string[];
   segments: Segment[];
+  publish?: {
+    caption?: Caption;
+    candidates?: { t: number; file: string; at: number }[];
+    cover?: { t: number; title: string; position: CoverPos; file: string; at: number };
+  };
+  mask_detect?: { found: boolean; bottom?: number; height?: number };
   outputs: Partial<Record<"preview" | "final" | "srt" | "json" | "txt", Output>>;
   busy: boolean;
 };
@@ -53,8 +65,10 @@ export type ProjectSummary = {
   has_final: boolean;
 };
 
+export type VoiceInfo = { label: string; group: string; gender: string; note: string };
+
 export type Config = {
-  voices: Record<string, string>;
+  voices: Record<string, VoiceInfo>;
   defaults: Settings;
   max_upload_mb: number;
   max_duration_min: number;
@@ -64,13 +78,13 @@ export type Config = {
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
 
 export const ACTIVE: ReadonlySet<Stage> = new Set([
-  "queued", "downloading", "extracting", "model", "transcribing", "translating", "dubbing", "separating", "rendering",
+  "queued", "downloading", "extracting", "model", "transcribing", "detecting", "translating", "dubbing", "separating", "rendering",
 ]);
 export const isActive = (p: Pick<Project, "status"> & { busy?: boolean }) => !!p.busy || ACTIVE.has(p.status.stage);
 
 export const STAGE_LABEL: Record<Stage, string> = {
   queued: "Đang chờ", downloading: "Đang tải", extracting: "Tách âm", model: "Tải model",
-  transcribing: "Nhận dạng", translating: "Đang dịch", review: "Chờ duyệt", dubbing: "Lồng tiếng",
+  transcribing: "Nhận dạng", detecting: "Dò phụ đề", translating: "Đang dịch", review: "Chờ duyệt", dubbing: "Lồng tiếng",
   separating: "Tách nhạc", rendering: "Đang xuất", done: "Hoàn tất", error: "Lỗi",
 };
 
@@ -95,15 +109,36 @@ export const api = {
   remove: (id: string) => req<{ ok: boolean }>(P(id), { method: "DELETE" }),
   fromUrl: (url: string, settings: Partial<Settings>) =>
     req<Project>("/api/projects/url", { method: "POST", body: { url, settings } }),
+  cancel: (id: string) => req<Project>(`${P(id)}/cancel`, { method: "POST" }),
   retry: (id: string) => req<Project>(`${P(id)}/retry`, { method: "POST" }),
   settings: (id: string, settings: DeepPartial<Settings>) =>
     req<Project>(`${P(id)}/settings`, { method: "PATCH", body: settings }),
   editLine: (id: string, sid: number, vi: string) =>
     req<Project>(`${P(id)}/segments/${sid}`, { method: "PATCH", body: { vi } }),
   lineTts: (id: string, sid: number) => req<Project>(`${P(id)}/segments/${sid}/tts`, { method: "POST" }),
+  detectMask: (id: string) => req<Project>(`${P(id)}/detect-mask`, { method: "POST" }),
+  caption: (id: string) => req<Project>(`${P(id)}/caption`, { method: "POST" }),
+  editCaption: (id: string, c: Caption) => req<Project>(`${P(id)}/caption`, { method: "PATCH", body: c }),
+  thumbCandidates: (id: string) => req<Project>(`${P(id)}/thumb-candidates`, { method: "POST" }),
+  cover: (id: string, t: number, title: string, position: CoverPos) =>
+    req<Project>(`${P(id)}/cover`, { method: "POST", body: { t, title, position } }),
+  musicList: () => req<MusicTrack[]>("/api/music"),
+  musicDelete: (mid: string) => req<{ ok: boolean }>(`/api/music/${mid}`, { method: "DELETE" }),
+  musicUpload: async (file: File): Promise<MusicTrack> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch("/api/music", { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `Lỗi ${r.status}`);
+    return d as MusicTrack;
+  },
   render: (id: string, previewStart: number | null) =>
     req<Project>(`${P(id)}/render`, { method: "POST", body: { preview_start: previewStart } }),
 };
+
+export const voiceSampleUrl = (voice: string) => `/api/voices/${encodeURIComponent(voice)}/sample`;
+
+export const musicUrl = (mid: string) => `/api/music/${mid}/file`;
 
 export const fileUrl = (id: string, rel: string, v?: number | string) =>
   `${P(id)}/files/${rel}${v ? `?v=${v}` : ""}`;
@@ -142,3 +177,22 @@ export function slotOf(p: Project, i: number) {
 export function ttsFresh(s: Segment, st: Settings) {
   return !!s.tts && s.tts.text === s.vi.trim() && s.tts.voice === st.voice && Math.abs(s.tts.rate - st.rate) < 1e-3;
 }
+
+/** Clipboard API needs a secure context (localhost is fine, http://192.168… is not). */
+export async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {}
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  ta.remove();
+}
+
+export const fullCaption = (c: Caption) =>
+  [c.title, c.description, c.hashtags.join(" ")].filter((x) => x.trim()).join("\n\n");

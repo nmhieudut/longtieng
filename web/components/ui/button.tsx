@@ -45,6 +45,7 @@ function Button({
   variant = "default",
   size = "default",
   asChild = false,
+  children,
   ...props
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
@@ -59,7 +60,17 @@ function Button({
       data-size={size}
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
-    />
+    >
+      {asChild ? children : wrapText(children)}
+    </Comp>
+  )
+}
+
+// Bare text next to an icon that swaps (e.g. <Copy/> → <Check/>) crashes React when a browser
+// translator has replaced that text node. A <span> per text run keeps React's nodes intact.
+function wrapText(children: React.ReactNode) {
+  return React.Children.map(children, (c) =>
+    typeof c === "string" || typeof c === "number" ? <span>{c}</span> : c
   )
 }
 

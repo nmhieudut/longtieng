@@ -47,6 +47,12 @@ def clean_settings(s: dict) -> dict:
     s["orig_volume"] = min(1.0, max(0.0, float(s["orig_volume"])))
     s["sub_size"] = min(2.0, max(0.5, float(s["sub_size"])))
     s["sub_margin"] = min(50, max(0, float(s["sub_margin"])))
+    mu = s["music"]
+    mu["volume"] = min(1.0, max(0.0, float(mu["volume"])))
+    mu["start"] = max(0.0, float(mu["start"]))
+    mu["duck"] = bool(mu["duck"])
+    if mu["track"] is not None and not isinstance(mu["track"], str):
+        mu["track"] = None
     m = s["mask"]
     m["bottom"] = min(90, max(0, float(m["bottom"])))
     m["height"] = min(50, max(2, float(m["height"])))

@@ -9,6 +9,7 @@ export function useProject(id: string) {
   const [project, setProject] = useState<Project | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const [offline, setOffline] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -21,12 +22,16 @@ export function useProject(id: string) {
     let live = true;
     const t = setTimeout(() => {
       api.get(id)
-        .then((p) => live && setProject(p))
-        .catch(() => live && setTimeout(() => live && setTick((n) => n + 1), 2000));
+        .then((p) => { if (live) { setOffline(false); setProject(p); } })
+        .catch(() => {
+          if (!live) return;
+          setOffline(true);  // tell the user instead of spinning forever
+          setTimeout(() => live && setTick((n) => n + 1), 2000);
+        });
     }, 1000);
     return () => { live = false; clearTimeout(t); };
   }, [project, id, tick]);
 
   const apply = useCallback((p: Project) => setProject(p), []);
-  return { project, error, apply };
+  return { project, error, apply, offline };
 }

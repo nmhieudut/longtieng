@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { StageBadge } from "@/components/project/stage-badge";
+import { VoicePicker } from "@/components/voice-picker";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
@@ -133,26 +134,20 @@ function NewProject() {
           </TabsContent>
         </Tabs>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="grid gap-2">
-            <Label>Ngôn ngữ gốc</Label>
-            <Select value={lang} onValueChange={setLang}>
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="zh">Tiếng Trung</SelectItem>
-                <SelectItem value="auto">Tự nhận diện</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid gap-2">
-            <Label>Giọng đọc</Label>
-            <Select value={voice} onValueChange={setVoice}>
-              <SelectTrigger className="w-full"><SelectValue placeholder="…" /></SelectTrigger>
-              <SelectContent>
-                {cfg && Object.entries(cfg.voices).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
+        <div className="grid gap-2">
+          <Label>Ngôn ngữ gốc</Label>
+          <Select value={lang} onValueChange={setLang}>
+            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="zh">Tiếng Trung</SelectItem>
+              <SelectItem value="auto">Tự nhận diện</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="grid gap-2">
+          <Label>Giọng đọc <span className="font-normal text-muted-foreground">· bấm ▶ để nghe thử</span></Label>
+          <VoicePicker voices={cfg?.voices ?? {}} value={voice} onChange={setVoice} className="max-h-72" />
         </div>
 
         {pct !== null && (

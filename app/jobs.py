@@ -1,9 +1,12 @@
 """Background jobs. One heavy job at a time: Whisper/demucs twice on 16GB would swap."""
 
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 
-from . import dub, render, store, stt, translate
+from . import cancel, dub, ocr, render, store, stt, translate
+from .cancel import Cancelled
 from .config import MAX_DURATION_MIN
 from .media import MediaError, download_url, extract_audio_16k, probe
 
@@ -16,21 +19,42 @@ def busy(pid: str) -> bool:
     return pid in _queued
 
 
+def step(pid: str, stage: str, progress: float | None = None, message: str = "") -> None:
+    """Report progress — and stop here if the user pressed Huỷ."""
+    cancel.check(pid)
+    store.set_status(pid, stage, progress, message)
+
+
+def request_cancel(pid: str) -> None:
+    cancel.cancel(pid)
+
+
 def _submit(pid: str, fn, *args):
     if pid in _queued:
         raise RuntimeError("Dự án đang được xử lý, đợi xong đã.")
     _queued.add(pid)
+    cancel.reset(pid)
 
     def wrapped():
+        cancel.bind(pid)
         try:
+            cancel.check(pid)
             fn(pid, *args)
+        except Cancelled:
+            p = store.load(pid)
+            if p["segments"]:
+                store.set_status(pid, "review", None, "Đã huỷ. Bản dịch vẫn giữ nguyên, bấm xuất lại khi sẵn sàng.")
+            else:
+                store.set_status(pid, "error", None, "Đã huỷ.", error="Đã huỷ theo yêu cầu. Bấm Thử lại để chạy lại.")
         except Exception as e:
-            msg = str(e) if isinstance(e, (MediaError, RuntimeError)) else f"{type(e).__name__}: {e}"
+            known = (MediaError, RuntimeError, TimeoutError)
+            msg = str(e) if isinstance(e, known) else f"{type(e).__name__}: {e}"
             traceback.print_exc()
             p = store.load(pid)
             back = "review" if p["segments"] else "error"
             store.set_status(pid, back, None, "Có lỗi xảy ra.", error=msg)
         finally:
+            cancel.bind(None)
             _queued.discard(pid)
 
     heavy.submit(wrapped)
@@ -47,9 +71,9 @@ def _prepare(pid: str):
     p = store.load(pid)
 
     if p["source"]["type"] == "url" and not p["source"].get("file"):
-        store.set_status(pid, "downloading", 0, "Đang tải video từ link…")
+        step(pid, "downloading", 0, "Đang tải video từ link…")
         f = download_url(p["source"]["url"], d,
-                         lambda x: store.set_status(pid, "downloading", x, "Đang tải video từ link…"))
+                         lambda x: step(pid, "downloading", x, "Đang tải video từ link…"))
         store.update(pid, lambda q: q["source"].__setitem__("file", f.name))
         p = store.load(pid)
 
@@ -61,29 +85,34 @@ def _prepare(pid: str):
         raise MediaError("Video không có âm thanh, không có gì để nhận dạng.")
     store.update(pid, lambda q: q.__setitem__("media", media))
 
-    store.set_status(pid, "extracting", None, "Đang tách âm thanh…")
+    step(pid, "extracting", None, "Đang tách âm thanh…")
     extract_audio_16k(src, d / "audio16k.wav")
 
     if not stt.model_cached():
-        store.set_status(pid, "model", None, "Lần đầu chạy: đang tải model Whisper (~1.6GB), chờ vài phút…")
+        step(pid, "model", None, "Lần đầu chạy: đang tải model Whisper (~1.6GB), chờ vài phút…")
         stt.ensure_model()
 
-    store.set_status(pid, "transcribing", 0, "Đang nhận dạng giọng nói…")
+    step(pid, "transcribing", 0, "Đang nhận dạng giọng nói…")
     last = [0.0]
 
     def prog(x):
+        cancel.check(pid)  # called from Whisper's progress hook, so this interrupts transcription
         if x - last[0] >= 0.02 or x >= 1:
             last[0] = x
-            store.set_status(pid, "transcribing", x, "Đang nhận dạng giọng nói…")
+            step(pid, "transcribing", x, "Đang nhận dạng giọng nói…")
 
     segs, lang = stt.transcribe(d / "audio16k.wav", p["settings"]["lang"], prog)
     if not segs:
         raise MediaError("Không nhận dạng được câu thoại nào trong video.")
 
-    store.set_status(pid, "translating", 0, f"Đang dịch {len(segs)} câu…")
+    if p["settings"]["mask"].get("auto", True) and ocr.available():
+        step(pid, "detecting", None, "Đang dò phụ đề Trung có sẵn trên video…")
+        apply_mask_detection(pid, ocr.detect(src, segs, media["duration"]))
+
+    step(pid, "translating", 0, f"Đang dịch {len(segs)} câu…")
     warnings = translate.translate_all(
         segs, media["duration"], lang, p["settings"]["rate"],
-        lambda x: store.set_status(pid, "translating", x, f"Đang dịch {len(segs)} câu…"))
+        lambda x: step(pid, "translating", x, f"Đang dịch {len(segs)} câu…"))
 
     for i, s in enumerate(segs):
         s["fit"] = dub.estimate(s["vi"], dub.slot(segs, i, media["duration"]), p["settings"]["rate"])
@@ -95,6 +124,18 @@ def _prepare(pid: str):
         q["status"] = {"stage": "review", "progress": None,
                        "message": "Xong. Kiểm tra bản dịch rồi bấm Lồng tiếng.", "error": None}
     store.update(pid, fin)
+
+
+def apply_mask_detection(pid: str, found: dict | None) -> dict:
+    def fn(q):
+        m = q["settings"]["mask"]
+        m["auto"] = True
+        if found:
+            m.update(enabled=True, bottom=found["bottom"], height=found["height"])
+        else:
+            m["enabled"] = False
+        q["mask_detect"] = {"found": bool(found), **(found or {})}
+    return store.update(pid, fn)
 
 
 # ---------- dub + render
@@ -111,6 +152,7 @@ def synth_missing(pid: str, on_progress=None) -> None:
     done = [0]
 
     def one(i):
+        cancel.check(pid)
         res = dub.make_line(store.pdir(pid), segs[i], dub.slot(segs, i, dur), st["voice"], st["rate"])
         sid = segs[i]["id"]
         text = segs[i]["vi"]
@@ -124,14 +166,28 @@ def synth_missing(pid: str, on_progress=None) -> None:
         if on_progress:
             on_progress(done[0] / len(todo))
 
-    for f in [light.submit(one, i) for i in todo]:
-        f.result()
+    futures = [(i, light.submit(one, i)) for i in todo]
+    try:
+        for i, f in futures:
+            try:
+                # every TTS call has its own timeout; this is the last safety net against a stuck line
+                f.result(timeout=300)
+            except FutureTimeout:
+                raise TimeoutError(f"Tạo giọng câu #{segs[i]['id']} quá 5 phút nên đã dừng. Thử lại hoặc đổi giọng khác.")
+            except Cancelled:
+                raise
+            except Exception as e:
+                raise RuntimeError(f"Tạo giọng câu #{segs[i]['id']} lỗi: {e}")
+    except BaseException:
+        for _, f in futures:
+            f.cancel()
+        raise
 
 
 def _render(pid: str, preview_start: float | None):
     d = store.pdir(pid)
-    store.set_status(pid, "dubbing", 0, "Đang tạo giọng lồng tiếng…")
-    synth_missing(pid, lambda x: store.set_status(pid, "dubbing", x, "Đang tạo giọng lồng tiếng…"))
+    step(pid, "dubbing", 0, "Đang tạo giọng lồng tiếng…")
+    synth_missing(pid, lambda x: step(pid, "dubbing", x, "Đang tạo giọng lồng tiếng…"))
 
     p = store.load(pid)
     st, media = p["settings"], p["media"]
@@ -142,7 +198,7 @@ def _render(pid: str, preview_start: float | None):
     if st["audio_mode"] == "duck":
         bg = src
     elif st["audio_mode"] == "demucs":
-        store.set_status(pid, "separating", None, "Đang tách nhạc nền (demucs, vài phút)…")
+        step(pid, "separating", None, "Đang tách nhạc nền (demucs, vài phút)…")
         bg = render.separate_background(d, src)
 
     render.write_srt(p["segments"], media["duration"], d / "out" / "phude.srt")
@@ -151,13 +207,11 @@ def _render(pid: str, preview_start: float | None):
     preview = preview_start is not None
     out = d / "out" / ("preview.mp4" if preview else "final.mp4")
     label = "Đang dựng bản xem thử…" if preview else "Đang xuất video…"
-    store.set_status(pid, "rendering", 0, label)
+    step(pid, "rendering", 0, label)
     render.render(d, p, out, bg,
                   start=preview_start or 0.0,
                   length=min(30.0, media["duration"] - preview_start) if preview else None,
-                  on_progress=lambda x: store.set_status(pid, "rendering", x, label))
-
-    import time
+                  on_progress=lambda x: step(pid, "rendering", x, label))
 
     def fin(q):
         key = "preview" if preview else "final"

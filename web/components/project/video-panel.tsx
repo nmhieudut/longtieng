@@ -1,8 +1,10 @@
 "use client";
 
+import { HelpCircle } from "lucide-react";
 import { type RefObject, useCallback, useEffect, useState } from "react";
 
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { fmt, type Project, type Settings } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -37,7 +39,7 @@ export function VideoPanel({ project: p, videoRef, src, view, onView, time, acti
             controls
             playsInline
             preload="metadata"
-            className="mx-auto block max-h-[58vh] w-full bg-black"
+            className="mx-auto block max-h-[44vh] w-full bg-black"
             onTimeUpdate={(e) => onTime(e.currentTarget.currentTime)}
             onLoadedMetadata={onLoaded}
           />
@@ -146,11 +148,19 @@ function Timeline({ project: p, time, activeIdx, onSeek }: { project: Project; t
         ))}
         {time >= 0 && <div className="pointer-events-none absolute inset-y-0 w-0.5 bg-foreground" style={{ left: pct(time) }} />}
       </div>
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-        <Legend className="bg-ok/70" label="vừa khung" />
-        <Legend className="bg-fast/80" label="đọc nhanh hơn để vừa" />
-        <Legend className="bg-over/80" label="tràn, sẽ bị cắt" />
-        <Legend className="bg-muted-foreground/30" label="chưa dịch" />
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+        <span>Mỗi khối là một câu · bấm để nhảy tới</span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button type="button" className="flex items-center gap-1 hover:text-foreground"><HelpCircle className="size-3.5" /> Màu</button>
+          </TooltipTrigger>
+          <TooltipContent className="grid gap-1">
+            <Legend className="bg-ok" label="vừa khung" />
+            <Legend className="bg-fast" label="đọc nhanh hơn để vừa" />
+            <Legend className="bg-over" label="tràn, sẽ bị cắt" />
+            <Legend className="bg-muted-foreground/50" label="chưa dịch" />
+          </TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );
