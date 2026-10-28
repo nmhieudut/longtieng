@@ -85,6 +85,7 @@ def check(force: bool = False) -> dict:
 
 
 def apply() -> dict:
+    check(force=True)  # the button may show a release that is no longer the newest
     with _lock:
         if _state["stage"] != "available":
             raise RuntimeError("Không có bản cập nhật nào để cài.")
@@ -186,7 +187,10 @@ def _restart_script(new_app: Path | None) -> Path:
         if new_app:
             # /MIR only on our own folder (has _internal); never mirror over e.g. Downloads
             mode = "/MIR" if (target / "_internal").is_dir() and target.name.lower().startswith("longtieng") else "/E"
-            lines.append(f'robocopy "{new_app}" "{target}" {mode} /R:5 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null')
+            log = UPDATES.parent / "logs" / "update.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            lines.append(f'robocopy "{new_app}" "{target}" {mode} /R:5 /W:1 /NFL /NDL /NJH /NJS /NP | Out-File -LiteralPath "{log}" -Encoding utf8')
+            lines.append(f'"robocopy exit code: $LASTEXITCODE (0-7 = ok, 8+ = failed); target: {target}" | Out-File -Append -LiteralPath "{log}" -Encoding utf8')
             lines.append(f'Remove-Item -Recurse -Force "{new_app.parent}" -ErrorAction SilentlyContinue')
         lines.append(f'Start-Process -FilePath "{target / "Longtieng.exe"}"')
         script = UPDATES / "restart.ps1"

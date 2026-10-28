@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, ExternalLink, KeyRound, Loader2, Settings2 } from "lucide-react";
+import { CheckCircle2, ExternalLink, KeyRound, Loader2, Settings } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -57,7 +57,7 @@ export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button variant="ghost" size="icon" aria-label="Cài đặt">
-          <Settings2 className="size-4" />
+          <Settings className="size-4" />
         </Button>
       </DialogTrigger>
       <DialogContent>
