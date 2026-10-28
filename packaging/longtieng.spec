@@ -8,8 +8,15 @@ ROOT = Path(SPECPATH).parent
 IS_MAC = sys.platform == "darwin"
 VERSION = (ROOT / "packaging" / "VERSION").read_text().strip()
 
+# The app's own code ships as plain files in "code/" (see packaging/launcher.py) so light updates can
+# replace it; packaging/make_patch.py builds the same folder for an update.
+CODE = ROOT / "build" / "code"
+if not (CODE / "app" / "desktop.py").is_file():
+    raise SystemExit("Run `python packaging/make_patch.py --dir build/code` first")
+
 datas = [
-    (str(ROOT / "web" / "out"), "web/out"),
+    (str(CODE), "code"),
+    (str(ROOT / "packaging" / "SHELL_VERSION"), "meta"),
     (str(ROOT / "assets" / "fonts"), "assets/fonts"),
 ]
 binaries = []
@@ -46,6 +53,8 @@ a = Analysis(
     excludes=excludes,
     noarchive=False,
 )
+# analysed above (so its imports are bundled) but loaded from code/ at run time
+a.pure = [e for e in a.pure if not (e[0] == "app" or e[0].startswith("app."))]
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz,

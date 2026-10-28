@@ -24,14 +24,23 @@ def _redirect_output(log_dir: Path) -> None:
 
 
 def _free_port() -> int:
-    for port in (PREFERRED_PORT, 0):  # fixed port keeps the web view's storage stable
+    """Fixed port keeps the web view's storage stable. Right after an update-restart the old
+    process may still hold it for a moment, so retry briefly before taking a random one."""
+    deadline = time.time() + 5
+    while True:
         with socket.socket() as s:
+            if sys.platform != "win32":  # on Windows SO_REUSEADDR would let two apps share the port
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
-                s.bind(("127.0.0.1", port))
-                return s.getsockname()[1]
+                s.bind(("127.0.0.1", PREFERRED_PORT))
+                return PREFERRED_PORT
             except OSError:
-                continue
-    raise RuntimeError("no free port")
+                if time.time() > deadline:
+                    break
+        time.sleep(0.25)
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 class _SingleInstance:
@@ -209,11 +218,16 @@ def main() -> None:
 
     port = _free_port()
     server = _start_server(port)
+    # this code version started fine: keep it (packaging/launcher.py rolls back otherwise)
+    (USER_DIR / "updates" / "booting").unlink(missing_ok=True)
     base = f"http://127.0.0.1:{port}"
     api = Api(base)
     window = webview.create_window("Lồng tiếng", base + "/", js_api=api, width=1400, height=900,
                                    min_size=(960, 640), text_select=True)
     api._window = window
+
+    from app import update
+    update.request_quit = window.destroy
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
     webview.settings["ALLOW_DOWNLOADS"] = True
     try:

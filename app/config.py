@@ -6,10 +6,24 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+# Source checkout: the repo. Packaged app: the "code" folder (bundled, or a newer one from an update).
 ROOT = Path(__file__).resolve().parent.parent
 # Packaged desktop app (PyInstaller): bundled files live in _MEIPASS, user data in the OS app-data folder
 FROZEN = bool(getattr(sys, "frozen", False))
 RES_DIR = Path(getattr(sys, "_MEIPASS", ROOT))
+
+
+def _read(*paths: Path) -> str:
+    for p in paths:
+        if p.is_file():
+            return p.read_text().strip()
+    return "0.0.0"
+
+
+# APP_VERSION changes with every release; SHELL_VERSION only when the native part (Python, libraries,
+# ffmpeg) changes. A light update replaces just the code, so it needs the same SHELL_VERSION.
+APP_VERSION = _read(ROOT / "VERSION", ROOT / "packaging" / "VERSION")
+SHELL_VERSION = _read(RES_DIR / "meta" / "SHELL_VERSION", ROOT / "packaging" / "SHELL_VERSION")
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
 
@@ -40,7 +54,7 @@ if FROZEN:
         pass
 
 DATA_DIR = USER_DIR / "projects"
-WEB_DIR = RES_DIR / "web" / "out"  # Next.js static export
+WEB_DIR = ROOT / "web" / "out"  # Next.js static export
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------- settings the user edits inside the app (API key, ...)

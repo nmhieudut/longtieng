@@ -1,4 +1,4 @@
-# Build the Windows app (folder + zip). Run on Windows with uv, pnpm (via corepack) installed.
+# Build the Windows app (folder + zip). Used by .github/workflows/release.yml. Run on Windows with uv, pnpm (via corepack) installed.
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
 $Version = (Get-Content packaging/VERSION).Trim()
@@ -17,6 +17,7 @@ New-Item -ItemType Directory -Force build/bin | Out-Null
 Copy-Item "$($src.FullName)/bin/*" build/bin/
 Remove-Item build/bin/ffplay.exe -ErrorAction SilentlyContinue
 
+uv run python packaging/make_patch.py --dir build/code
 uv run pyinstaller --noconfirm --clean --distpath dist --workpath build/pyinstaller packaging/longtieng.spec
 
 # GUI exe: run it with redirected output and wait, so we see the log and the exit code

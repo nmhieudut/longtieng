@@ -16,6 +16,22 @@ export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
   const [info, setInfo] = useState<AppSettings | null>(null);
   const [key, setKey] = useState("");
   const [saving, setSaving] = useState(false);
+  const [checking, setChecking] = useState(false);
+
+  async function checkUpdate() {
+    setChecking(true);
+    try {
+      const u = await api.updateState(true);
+      if (!u.enabled) toast.info("Bản chạy từ mã nguồn không tự cập nhật. Dùng git pull.");
+      else if (u.stage === "available") toast.success(`Có bản mới ${u.latest?.version}. Bấm nút “Có bản mới” trên thanh trên cùng.`);
+      else if (u.stage === "error") toast.error(u.error ?? "Không kiểm tra được.");
+      else toast.success("Bạn đang dùng bản mới nhất.");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setChecking(false);
+    }
+  }
 
   useEffect(() => {
     if (open) api.appSettings().then(setInfo).catch((e) => toast.error(e.message));
@@ -91,6 +107,14 @@ export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
             <dd>{info.stt_engine}{info.stt_model_ready ? "" : " · tải model ~1.6GB ở lần chạy đầu"}</dd>
             <dt className="text-muted-foreground">Dữ liệu lưu ở</dt>
             <dd className="break-all font-mono">{info.data_dir}</dd>
+            <dt className="text-muted-foreground">Phiên bản</dt>
+            <dd className="flex flex-wrap items-center gap-2">
+              {info.version}
+              <button type="button" className="underline underline-offset-2 hover:text-foreground" disabled={checking}
+                onClick={checkUpdate}>
+                {checking ? "Đang kiểm tra…" : "Kiểm tra bản mới"}
+              </button>
+            </dd>
           </dl>
         )}
       </DialogContent>

@@ -83,6 +83,17 @@ export type AppSettings = {
   stt_engine: string;
   stt_model_ready: boolean;
   data_dir: string;
+  version: string;
+};
+
+export type UpdateState = {
+  stage: "idle" | "none" | "available" | "downloading" | "installing" | "restarting" | "error";
+  progress: number | null;
+  error: string | null;
+  kind: "patch" | "full" | null;
+  latest: { version: string; notes?: string; patch?: { size?: number }; mac?: { size?: number }; windows?: { size?: number } } | null;
+  current: string;
+  enabled: boolean;
 };
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -117,6 +128,8 @@ export const api = {
   appSettings: () => req<AppSettings>("/api/app-settings"),
   saveAppSettings: (patch: { openai_key?: string }) =>
     req<AppSettings>("/api/app-settings", { method: "PUT", body: patch }),
+  updateState: (force = false) => req<UpdateState>(`/api/update${force ? "?force=1" : ""}`),
+  updateApply: () => req<UpdateState>("/api/update/apply", { method: "POST" }),
   list: () => req<ProjectSummary[]>("/api/projects"),
   get: (id: string) => req<Project>(P(id)),
   remove: (id: string) => req<{ ok: boolean }>(P(id), { method: "DELETE" }),

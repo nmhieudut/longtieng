@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 
 import { AppSettingsButton } from "@/components/app-settings";
 import { Button } from "@/components/ui/button";
+import { UpdateButton } from "@/components/update-button";
 import { api } from "@/lib/api";
 
 export function SiteHeader() {
@@ -26,7 +27,8 @@ export function SiteHeader() {
         <span className="ml-auto hidden truncate text-xs text-muted-foreground sm:block">
           {translator && `Dịch bằng: ${translator}`}
         </span>
-        <div className="ml-auto flex items-center sm:ml-0">
+        <div className="ml-auto flex items-center gap-1 sm:ml-0">
+        <UpdateButton />
         <AppSettingsButton onChanged={loadConfig} />
         <Button
           variant="ghost"

@@ -9,10 +9,10 @@ from pathlib import Path
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from . import dub, jobs, music, ocr, publish, store, stt
+from . import dub, jobs, music, ocr, publish, store, stt, update
 from .media import MediaError
 from .config import (
-    DATA_DIR, DEFAULT_SETTINGS, FROZEN, MAX_DURATION_MIN, MAX_UPLOAD_MB, OPENAI_MODEL, USER_DIR, VOICES, WEB_DIR,
+    APP_VERSION, DATA_DIR, DEFAULT_SETTINGS, FROZEN, MAX_DURATION_MIN, MAX_UPLOAD_MB, OPENAI_MODEL, USER_DIR, VOICES, WEB_DIR,
     demucs_available, openai_key, save_user_settings,
 )
 
@@ -70,6 +70,7 @@ async def lifespan(_app):
     _drop_track()
     # make "▶ nghe thử" instant: build every voice's demo clip in the background
     threading.Thread(target=_warm_samples, daemon=True).start()
+    update.check_in_background()
     yield
 
 
@@ -152,7 +153,24 @@ def app_settings():
         "stt_engine": stt.engine_label(),
         "stt_model_ready": stt.model_cached(),
         "data_dir": str(USER_DIR),
+        "version": APP_VERSION,
     }
+
+
+@app.get("/api/update")
+def update_state(force: int = 0):
+    return update.check(force=bool(force))
+
+
+@app.post("/api/update/apply")
+def update_apply():
+    busy = [p["title"] for p in store.list_all() if p["status"]["stage"] in ACTIVE]
+    if busy:
+        raise HTTPException(409, f"Đang xử lý “{busy[0]}”. Đợi xong (hoặc bấm Huỷ) rồi cập nhật.")
+    try:
+        return update.apply()
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.put("/api/app-settings")

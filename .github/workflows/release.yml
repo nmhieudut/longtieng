@@ -1,0 +1,95 @@
+name: Release
+
+# Push a tag vX.Y.Z (packaging/release.py does it) -> build Mac + Windows, publish a GitHub Release
+# with the installers, the light-update patch and latest.json (read by the app's updater).
+# Run manually (workflow_dispatch) to just build without publishing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Build
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
+        run: ./packaging/build_windows.ps1
+      - name: Light-update patch
+        shell: pwsh
+        run: uv run python packaging/make_patch.py --zip "dist/Longtieng-$((Get-Content packaging/VERSION).Trim())-patch.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+          retention-days: 30
+
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: ffmpeg with libass
+        run: brew install ffmpeg-full
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Build
+        run: ./packaging/build_mac.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          retention-days: 30
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: latest.json
+        run: |
+          git fetch --force --tags
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" | sed '/-----BEGIN/,$d' > notes.txt
+          python3 packaging/latest_json.py "$GITHUB_REF_NAME" assets notes.txt > assets/latest.json
+          cat assets/latest.json
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" assets/* --title "Lồng tiếng $GITHUB_REF_NAME" --notes-file notes.txt --latest
