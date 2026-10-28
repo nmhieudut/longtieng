@@ -113,7 +113,8 @@ def _prepare(pid: str):
     step(pid, "translating", 0, f"Đang dịch {len(segs)} câu…")
     warnings = translate.translate_all(
         segs, media["duration"], lang, p["settings"]["rate"],
-        lambda x: step(pid, "translating", x, f"Đang dịch {len(segs)} câu…"))
+        lambda x: step(pid, "translating", x, f"Đang dịch {len(segs)} câu…"),
+        script=p["settings"].get("script"))
 
     for i, s in enumerate(segs):
         s["fit"] = dub.estimate(s["vi"], dub.slot(segs, i, media["duration"]), p["settings"]["rate"])
@@ -124,6 +125,36 @@ def _prepare(pid: str):
         q["warnings"] = warnings
         q["status"] = {"stage": "review", "progress": None,
                        "message": "Xong. Kiểm tra bản dịch rồi bấm Lồng tiếng.", "error": None}
+    store.update(pid, fin)
+    if store.load(pid).get("auto_render"):  # batch: go straight on to the export
+        _render(pid, None)
+
+
+# ---------- rewrite: translate again (e.g. after switching to review mode)
+
+def submit_rewrite(pid: str):
+    _submit(pid, _rewrite)
+
+
+def _rewrite(pid: str):
+    p = store.load(pid)
+    segs = [dict(s, vi="") for s in p["segments"]]
+    mode = p["settings"]["script"]["mode"]
+    label = "Đang viết lại lời dẫn…" if mode == "review" else "Đang dịch lại…"
+    step(pid, "translating", 0, label)
+    warnings = translate.translate_all(
+        segs, p["media"]["duration"], p.get("detected_lang") or p["settings"]["lang"], p["settings"]["rate"],
+        lambda x: step(pid, "translating", x, label), script=p["settings"]["script"])
+    dur = p["media"]["duration"]
+    for i, s in enumerate(segs):
+        s["fit"] = dub.estimate(s["vi"], dub.slot(segs, i, dur), p["settings"]["rate"]) if s["vi"].strip() else None
+
+    def fin(q):
+        q["segments"] = segs  # old voice clips no longer match the text, so they get remade on export
+        q["warnings"] = warnings
+        q["edited_at"] = time.time()
+        q["status"] = {"stage": "review", "progress": None,
+                       "message": "Đã viết lại. Kiểm tra rồi bấm Lồng tiếng.", "error": None}
     store.update(pid, fin)
 
 

@@ -9,7 +9,8 @@ from pathlib import Path
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from . import dub, jobs, music, ocr, publish, store, stt, update
+from . import dub, jobs, logos, music, ocr, publish, render, store, stt, translate, update
+from .frame import ASPECTS
 from .media import MediaError
 from .config import (
     APP_VERSION, DATA_DIR, DEFAULT_SETTINGS, FROZEN, MAX_DURATION_MIN, MAX_UPLOAD_MB, OPENAI_MODEL, USER_DIR, VOICES, WEB_DIR,
@@ -96,7 +97,7 @@ def _view(p: dict) -> dict:
     return p | {"settings": store.clean_settings(p["settings"]), "busy": jobs.busy(p["id"])}
 
 
-def _check_settings(s: dict) -> dict:
+def _check_settings(s: dict, new: bool = False) -> dict:
     if not isinstance(s, dict):
         raise HTTPException(400, "Cài đặt không hợp lệ.")
     for k, allowed in ENUMS.items():
@@ -106,10 +107,21 @@ def _check_settings(s: dict) -> dict:
     if isinstance(m, dict) and "style" in m and m["style"] not in {"blur", "box"}:
         raise HTTPException(400, "Kiểu che phụ đề không hợp lệ.")
     mu = s.get("music")
+    nested = {("frame", "aspect"): {"original", *ASPECTS}, ("frame", "fit"): {"blur", "crop"},
+              ("logo", "position"): {"tl", "tr", "bl", "br"},
+              ("script", "mode"): {"translate", "review"}, ("script", "style"): set(translate.REVIEW_STYLES)}
+    for (k, f), allowed in nested.items():
+        if isinstance(s.get(k), dict) and f in s[k] and s[k][f] not in allowed:
+            raise HTTPException(400, f"Giá trị không hợp lệ cho {k}.{f}: {s[k][f]!r}")
+    if "sub_style" in s and s["sub_style"] not in render.SUB_STYLES:
+        raise HTTPException(400, "Kiểu phụ đề không hợp lệ.")
+    lg = s.get("logo")
+    if isinstance(lg, dict) and lg.get("image") and not logos.get(str(lg["image"])):
+        raise HTTPException(400, "Logo không còn trong thư viện.")
     if isinstance(mu, dict) and mu.get("track") and not music.get(str(mu["track"])):
         raise HTTPException(400, "Bài nhạc không còn trong thư viện.")
     try:
-        return store.clean_settings(s)
+        return store.new_settings(s) if new else store.clean_settings(s)
     except (TypeError, ValueError):
         raise HTTPException(400, "Cài đặt không hợp lệ.")
 
@@ -131,12 +143,15 @@ def _refit(p: dict):
 def config():
     return {
         "voices": VOICES,
-        "defaults": DEFAULT_SETTINGS,
+        "defaults": store.new_settings({}),
         "max_upload_mb": MAX_UPLOAD_MB,
         "max_duration_min": MAX_DURATION_MIN,
         "translator": f"OpenAI ({OPENAI_MODEL})" if openai_key() else "Google Dịch (chưa nhập OpenAI API key)",
         "features": {"demucs": demucs_available()},
         "langs": {k: v["label"] for k, v in SOURCE_LANGS.items()},
+        "sub_styles": {k: v["label"] for k, v in render.SUB_STYLES.items()},
+        "review_styles": {k: v[0] for k, v in translate.REVIEW_STYLES.items()},
+        "user_defaults": bool(store.user_defaults()),
         "desktop": FROZEN,
     }
 
@@ -227,6 +242,55 @@ def _drop_track(mid: str | None = None):
             store.update(pid, lambda q: q["settings"]["music"].__setitem__("track", None))
 
 
+# ---------- shared logo library
+
+@app.get("/api/logos")
+def logo_list():
+    return logos.list_all()
+
+
+@app.post("/api/logos")
+def logo_upload(file: UploadFile = File(...)):
+    try:
+        return logos.add(file.filename or "Logo", Path(file.filename or "").suffix, file.file)
+    except MediaError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/logos/{lid}")
+def logo_delete(lid: str):
+    logos.delete(lid)
+    for summary in store.list_all():
+        if store.load(summary["id"])["settings"]["logo"].get("image") == lid:
+            store.update(summary["id"], lambda q: q["settings"].setdefault("logo", {}).__setitem__("image", None))
+    return {"ok": True}
+
+
+@app.get("/api/logos/{lid}/file")
+def logo_file(lid: str):
+    item = logos.get(lid)
+    if not item or not logos.path(item).exists():
+        raise HTTPException(404, "Không có logo này.")
+    return FileResponse(logos.path(item), headers={"Cache-Control": "max-age=86400"})
+
+
+# ---------- default settings for new videos
+
+@app.put("/api/default-settings")
+def save_defaults(settings: dict = Body(..., embed=True)):
+    st = _check_settings(settings)
+    keep = {k: st[k] for k in store.DEFAULT_KEYS}
+    keep["mask"] = {"auto": st["mask"]["auto"], "style": st["mask"]["style"]}
+    save_user_settings({"defaults": keep})
+    return {"ok": True}
+
+
+@app.delete("/api/default-settings")
+def reset_defaults():
+    save_user_settings({"defaults": {}})
+    return {"ok": True}
+
+
 @app.get("/api/music/{mid}/file")
 def music_file(mid: str):
     m = music.get(mid)
@@ -264,16 +328,16 @@ def list_projects():
 
 
 @app.post("/api/projects/upload")
-def upload(file: UploadFile = File(...), settings: str = Form("{}")):
+def upload(file: UploadFile = File(...), settings: str = Form("{}"), auto_render: bool = Form(False)):
     ext = Path(file.filename or "").suffix.lower()
     if ext not in VIDEO_EXT:
         raise HTTPException(400, f"Định dạng {ext or '?'} không hỗ trợ. Dùng mp4, mov, webm, mkv.")
     try:
-        st = _check_settings(json.loads(settings or "{}"))
+        st = _check_settings(json.loads(settings or "{}"), new=True)
     except json.JSONDecodeError:
         raise HTTPException(400, "Cài đặt không hợp lệ.")
     title = Path(file.filename).stem[:120] or "Video"
-    p = store.create(title, {"type": "upload", "file": f"source{ext}", "name": file.filename}, st)
+    p = store.create(title, {"type": "upload", "file": f"source{ext}", "name": file.filename}, st, auto_render)
     dst = store.pdir(p["id"]) / f"source{ext}"
     limit = MAX_UPLOAD_MB * 1024 * 1024
     size = 0
@@ -292,12 +356,13 @@ def upload(file: UploadFile = File(...), settings: str = Form("{}")):
 
 
 @app.post("/api/projects/url")
-def from_url(url: str = Body(..., embed=True), settings: dict = Body({}, embed=True)):
+def from_url(url: str = Body(..., embed=True), settings: dict = Body({}, embed=True),
+             auto_render: bool = Body(False, embed=True)):
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "Link phải bắt đầu bằng http:// hoặc https://")
-    st = _check_settings(settings)
-    p = store.create(url[:120], {"type": "url", "url": url, "file": None}, st)
+    st = _check_settings(settings, new=True)
+    p = store.create(url[:120], {"type": "url", "url": url, "file": None}, st, auto_render)
     jobs.submit_prepare(p["id"])
     return _view(store.load(p["id"]))
 
@@ -346,7 +411,8 @@ def patch_settings(pid: str, settings: dict = Body(...)):
         merged = p["settings"] | {k: v for k, v in settings.items() if k != "mask"}
         mask_patch = settings.get("mask") or {}
         merged["mask"] = p["settings"]["mask"] | mask_patch
-        merged["music"] = (p["settings"].get("music") or {}) | (settings.get("music") or {})
+        for k in ("music", "frame", "logo", "script"):  # nested groups: patch field by field
+            merged[k] = (p["settings"].get(k) or {}) | (settings.get(k) or {})
         if set(mask_patch) & {"enabled", "bottom", "height"}:
             merged["mask"]["auto"] = False  # the user took over
         new = _check_settings(merged)
@@ -459,6 +525,40 @@ def segment_tts(pid: str, sid: int):
         return _view(store.update(pid, lambda q: q.__setitem__("edited_at", time.time())))
     except RuntimeError as e:
         raise HTTPException(502, str(e))
+
+
+@app.get("/api/projects/{pid}/still")
+def still_preview(pid: str, t: float = 0.0):
+    """One frame exactly as the export will look (framing, mask, subtitle style, logo)."""
+    p = _load(pid)
+    if not p.get("media"):
+        raise HTTPException(400, "Video chưa sẵn sàng.")
+    t = min(max(0.0, t), max(0.0, p["media"]["duration"] - 0.1))
+    out = store.pdir(pid) / "thumbs" / "still.jpg"
+    out.parent.mkdir(exist_ok=True)
+    try:
+        render.still(store.pdir(pid), p, t, out, width=720)
+    except MediaError as e:
+        raise HTTPException(500, str(e))
+    return FileResponse(out, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/projects/{pid}/rewrite")
+def rewrite(pid: str):
+    p = _load(pid)
+    _not_busy(pid)
+    if not p["segments"]:
+        raise HTTPException(400, "Chưa có lời thoại để viết lại.")
+    if p["settings"]["script"]["mode"] == "review" and not openai_key():
+        raise HTTPException(400, "Chế độ review cần OpenAI API key. Nhập key trong Cài đặt (bánh răng).")
+    prev = p["status"]
+    store.set_status(pid, "translating", 0, "Đang chờ…")
+    try:
+        jobs.submit_rewrite(pid)
+    except RuntimeError as e:
+        store.update(pid, lambda q: q.__setitem__("status", prev))
+        raise HTTPException(409, str(e))
+    return _view(store.load(pid))
 
 
 @app.post("/api/projects/{pid}/render")

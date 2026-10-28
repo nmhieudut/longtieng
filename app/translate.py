@@ -17,6 +17,32 @@ Yêu cầu:
 Trả về JSON: {"items":[{"id":<số>,"vi":"<bản dịch>"}]} với đúng mọi id được gửi."""
 
 
+REVIEW_SYSTEM = """Bạn là người dẫn chuyện của một kênh video ngắn tiếng Việt. Từ lời thoại gốc ({src}) của từng đoạn,
+viết LỜI DẪN tiếng Việt để lồng tiếng thay cho lời thoại, theo phong cách: {style}
+Yêu cầu:
+- Kể lại / bình luận chuyện đang diễn ra thay vì dịch sát từng chữ. Có thể đổi sang ngôi kể thứ ba
+  ("cô gái", "anh chàng", "ông chủ"...), thêm cảm xúc, câu dẫn dắt, nhưng KHÔNG bịa chi tiết trái với lời gốc.
+- Các đoạn nối liền thành một mạch kể trôi chảy; đọc context_before để nối tiếp cho tự nhiên.
+- Mỗi id đúng một câu dẫn, KHÔNG vượt quá max_chars ký tự (lời sẽ được đọc trong đúng thời lượng đoạn đó).
+- Đoạn chỉ là tiếng cảm thán / không có ý nghĩa: viết một câu dẫn rất ngắn (2–5 chữ).
+- {names}
+Trả về JSON: {{"items":[{{"id":<số>,"vi":"<lời dẫn>"}}]}} với đúng mọi id được gửi."""
+
+# Narration styles for "review" mode: label shown in the app, and the instruction given to the AI.
+REVIEW_STYLES = {
+    "drama": ("Review phim kịch tính",
+              "giọng kể review phim cuốn hút, hồi hộp, nhấn vào tình tiết và cảm xúc nhân vật, tạo tò mò cho đoạn sau."),
+    "funny": ("Kể chuyện hài hước",
+              "giọng kể dí dỏm, bình luận vui, chơi chữ nhẹ nhàng kiểu người Việt, nhưng vẫn kể đúng chuyện."),
+    "summary": ("Tóm tắt nhanh",
+                "ngắn gọn, rõ ý, giọng bản tin / tóm tắt, đi thẳng vào chuyện gì đang xảy ra."),
+    "explain": ("Giải thích, chia sẻ kiến thức",
+                "như người hướng dẫn đang giải thích cho người xem: làm gì, vì sao, mẹo gì, dễ hiểu."),
+    "product": ("Review sản phẩm",
+                "giọng review sản phẩm / affiliate: nêu công dụng, điểm nổi bật, cảm nhận khi dùng, gợi mở mua thử."),
+}
+
+
 def budget(seconds: float, rate: float) -> int:
     return max(4, int(seconds * VI_CHARS_PER_SEC * rate))
 
@@ -26,13 +52,18 @@ def available_secs(segs: list[dict], i: int, duration: float) -> float:
     return max(0.3, nxt - segs[i]["start"])
 
 
-def translate_all(segs: list[dict], duration: float, src_lang: str, rate: float, on_progress=None) -> list[str]:
-    """Fills seg['vi'] in place. Returns list of warnings."""
+def translate_all(segs: list[dict], duration: float, src_lang: str, rate: float, on_progress=None,
+                  script: dict | None = None) -> list[str]:
+    """Fills seg['vi'] in place. Returns list of warnings.
+    script = {"mode": "review", "style": ...} asks the AI for narration instead of a faithful translation."""
     warnings = []
     todo = list(range(len(segs)))
+    review = bool(script and script.get("mode") == "review")
+    if review and not openai_key():
+        warnings.append("Chế độ review cần OpenAI API key, nên đang dịch sát nghĩa bằng Google.")
     if openai_key():
         try:
-            _openai(segs, duration, rate, src_lang, on_progress)
+            _openai(segs, duration, rate, src_lang, on_progress, script if review else None)
         except Exception as e:  # auth / quota / network — fall back to Google
             warnings.append(f"OpenAI lỗi ({type(e).__name__}: {str(e)[:160]}). Đã chuyển sang Google Dịch.")
         todo = [i for i, s in enumerate(segs) if not s["vi"].strip()]
@@ -48,12 +79,16 @@ def translate_all(segs: list[dict], duration: float, src_lang: str, rate: float,
     return warnings
 
 
-def _openai(segs, duration, rate, src_lang, on_progress):
+def _openai(segs, duration, rate, src_lang, on_progress, script=None):
     from openai import OpenAI
 
     client = OpenAI(api_key=openai_key(), max_retries=2, timeout=90)
     info = lang_info(src_lang)
-    system = SYSTEM.replace("{src}", info["name"]).replace("{names}", info["names"])
+    if script:
+        style = REVIEW_STYLES.get(script.get("style"), REVIEW_STYLES["drama"])[1]
+        system = REVIEW_SYSTEM.format(src=info["name"], style=style, names=info["names"])
+    else:
+        system = SYSTEM.replace("{src}", info["name"]).replace("{names}", info["names"])
     done_ctx: list[str] = []
     for b in range(0, len(segs), BATCH):
         chunk = range(b, min(b + BATCH, len(segs)))
@@ -73,7 +108,7 @@ def _openai(segs, duration, rate, src_lang, on_progress):
                     {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
                 ],
                 response_format={"type": "json_object"},
-                temperature=0.3,
+                temperature=0.75 if script else 0.3,
             )
             try:
                 data = json.loads(r.choices[0].message.content)

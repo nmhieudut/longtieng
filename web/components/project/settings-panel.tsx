@@ -1,6 +1,7 @@
 "use client";
 
-import { Captions, CheckCircle2, EyeOff, Loader2, Mic, Music, ScanText } from "lucide-react";
+import { BookmarkCheck, Captions, CheckCircle2, Eye, EyeOff, Loader2, Mic, Music, ScanText } from "lucide-react";
+import { toast } from "sonner";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -9,11 +10,20 @@ import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { VoicePicker } from "@/components/voice-picker";
 
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { api, stillUrl } from "@/lib/api";
+
+import { FrameSection, LogoSection, ScriptSection, SubStylePicker } from "./look-sections";
 import { MusicSection } from "./music-section";
 import { Field, Section, SliderField } from "./settings-ui";
 import type { DeepPartial, Project, Settings, VoiceInfo } from "@/lib/api";
 
 type Props = {
+  projectId: string;
+  previewAt: number;                           // video time used for the still preview
+  subStyles: Record<string, string>;
+  reviewStyles: Record<string, string>;
+  onRewrite: () => Promise<void>;
   settings: Settings;
   voices: Record<string, VoiceInfo>;
   canDemucs: boolean;
@@ -24,8 +34,13 @@ type Props = {
   onDetect: () => Promise<void>;
 };
 
-export function SettingsPanel({ settings, voices, canDemucs, disabled, onDraft, onSave, maskDetect, onDetect }: Props) {
+export function SettingsPanel({
+  projectId, previewAt, subStyles, reviewStyles, onRewrite,
+  settings, voices, canDemucs, disabled, onDraft, onSave, maskDetect, onDetect,
+}: Props) {
   const [detecting, setDetecting] = useState(false);
+  const [still, setStill] = useState<string | null>(null);
+  const [stillBusy, setStillBusy] = useState(false);
   const [s, setS] = useState(settings);
   const pending = useRef<DeepPartial<Settings>>({});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -36,19 +51,17 @@ export function SettingsPanel({ settings, voices, canDemucs, disabled, onDraft, 
   }, [settings]);
 
   function change(patch: DeepPartial<Settings>) {
-    const next: Settings = {
-      ...s, ...(patch as Partial<Settings>),
-      mask: { ...s.mask, ...(patch.mask ?? {}) },
-      music: { ...s.music, ...(patch.music ?? {}) },
-    };
+    const next = { ...s, ...(patch as Partial<Settings>) } as Settings;
+    const queued = { ...pending.current, ...patch } as Record<string, unknown>;
+    for (const k of NESTED) {
+      if (patch[k]) {
+        (next as Record<string, unknown>)[k] = { ...s[k], ...patch[k] };
+        queued[k] = { ...(pending.current[k] ?? {}), ...patch[k] };
+      }
+    }
     setS(next);
     onDraft(next);
-    pending.current = {
-      ...pending.current,
-      ...patch,
-      ...(patch.mask ? { mask: { ...(pending.current.mask ?? {}), ...patch.mask } } : {}),
-      ...(patch.music ? { music: { ...(pending.current.music ?? {}), ...patch.music } } : {}),
-    };
+    pending.current = queued as DeepPartial<Settings>;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(async () => {
       const body = pending.current;
@@ -58,7 +71,61 @@ export function SettingsPanel({ settings, voices, canDemucs, disabled, onDraft, 
     }, 450);
   }
 
+  /** Save what's queued now (the still preview and "save as default" must see the latest values). */
+  async function flush() {
+    if (!timer.current) return;
+    clearTimeout(timer.current);
+    timer.current = null;
+    const body = pending.current;
+    pending.current = {};
+    await onSave(body);
+  }
+
+  async function showStill() {
+    setStillBusy(true);
+    try {
+      await flush();
+      const url = stillUrl(projectId, previewAt);
+      const r = await fetch(url);
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "Không tạo được ảnh.");
+      setStill(URL.createObjectURL(await r.blob()));
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setStillBusy(false);
+    }
+  }
+
+  async function saveDefaults() {
+    try {
+      await flush();
+      await api.saveDefaults(s);
+      toast.success("Video mới (kể cả làm hàng loạt) sẽ dùng các cài đặt này.");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
   return (
+    <>
+    <div className="flex flex-wrap gap-2 border-b px-4 py-3">
+      <Button size="sm" variant="secondary" disabled={stillBusy || disabled} onClick={showStill}>
+        {stillBusy ? <Loader2 className="animate-spin" /> : <Eye />} Xem ảnh khung hình xuất ra
+      </Button>
+      <Button size="sm" variant="ghost" onClick={saveDefaults} title="Áp dụng cho video mới">
+        <BookmarkCheck /> Lưu làm mặc định
+      </Button>
+    </div>
+    <Dialog open={!!still} onOpenChange={(o) => { if (!o && still) { URL.revokeObjectURL(still); setStill(null); } }}>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Khung hình khi xuất</DialogTitle>
+          <DialogDescription>Ảnh tại giây đang xem: khung, che phụ đề, kiểu chữ và logo đúng như video xuất ra.</DialogDescription>
+        </DialogHeader>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        {still && <img src={still} alt="Khung hình xuất ra" className="mx-auto max-h-[70vh] rounded-lg border" />}
+      </DialogContent>
+    </Dialog>
     <Accordion type="multiple" className="px-4">
       <Section value="voice" icon={<Mic />} title="Giọng đọc"
         summary={`${voices[s.voice]?.label ?? s.voice} · ${s.rate.toFixed(2)}×`}>
@@ -68,6 +135,8 @@ export function SettingsPanel({ settings, voices, canDemucs, disabled, onDraft, 
         <SliderField label="Tốc độ nói" value={s.rate} min={0.8} max={1.3} step={0.05} disabled={disabled}
           show={(v) => `${v.toFixed(2)}×`} onChange={(v) => change({ rate: v })} />
       </Section>
+
+      <ScriptSection s={s} styles={reviewStyles} disabled={disabled} change={change} onRewrite={async () => { await flush(); await onRewrite(); }} />
 
       <Section value="audio" icon={<Music />} title="Âm thanh gốc"
         summary={s.audio_mode === "mute" ? "Tắt" : `${s.audio_mode === "duck" ? "Giảm nhỏ" : "Giữ nhạc nền"} · ${Math.round(s.orig_volume * 100)}%`}>
@@ -102,6 +171,7 @@ export function SettingsPanel({ settings, voices, canDemucs, disabled, onDraft, 
         </ToggleGroup>
         {s.subtitle_mode === "burn" && (
           <>
+            <SubStylePicker value={s.sub_style} styles={subStyles} disabled={disabled} onChange={(v) => change({ sub_style: v })} />
             <SliderField label="Cỡ chữ" value={s.sub_size} min={0.5} max={2} step={0.1} disabled={disabled}
               show={(v) => `${v.toFixed(1)}×`} onChange={(v) => change({ sub_size: v })} />
             {!s.mask.enabled && (
@@ -111,6 +181,9 @@ export function SettingsPanel({ settings, voices, canDemucs, disabled, onDraft, 
           </>
         )}
       </Section>
+
+      <FrameSection s={s} disabled={disabled} change={change} preview={null} />
+      <LogoSection s={s} disabled={disabled} change={change} />
 
       <Section
         value="mask"
@@ -161,5 +234,8 @@ export function SettingsPanel({ settings, voices, canDemucs, disabled, onDraft, 
         )}
       </Section>
     </Accordion>
+    </>
   );
 }
+
+const NESTED = ["mask", "music", "frame", "logo", "script"] as const;

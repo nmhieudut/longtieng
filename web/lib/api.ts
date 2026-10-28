@@ -22,7 +22,13 @@ export type Settings = {
   sub_margin: number;
   music: { track: string | null; volume: number; duck: boolean; start: number };
   mask: { enabled: boolean; auto: boolean; style: "blur" | "box"; bottom: number; height: number };
+  frame: { aspect: "original" | "9:16" | "16:9" | "1:1" | "4:5"; fit: "blur" | "crop"; zoom: number };
+  logo: { image: string | null; text: string; position: "tl" | "tr" | "bl" | "br"; size: number; opacity: number };
+  sub_style: string;
+  script: { mode: "translate" | "review"; style: string };
 };
+
+export type Logo = { id: string; name: string; file: string };
 
 export type Stage =
   | "queued" | "downloading" | "extracting" | "model" | "transcribing" | "detecting" | "translating"
@@ -75,6 +81,9 @@ export type Config = {
   translator: string;
   features: { demucs: boolean };
   langs: Record<string, string>;
+  sub_styles: Record<string, string>;
+  review_styles: Record<string, string>;
+  user_defaults: boolean;
   desktop: boolean;
 };
 
@@ -134,8 +143,21 @@ export const api = {
   list: () => req<ProjectSummary[]>("/api/projects"),
   get: (id: string) => req<Project>(P(id)),
   remove: (id: string) => req<{ ok: boolean }>(P(id), { method: "DELETE" }),
-  fromUrl: (url: string, settings: Partial<Settings>) =>
-    req<Project>("/api/projects/url", { method: "POST", body: { url, settings } }),
+  fromUrl: (url: string, settings: Partial<Settings>, autoRender = false) =>
+    req<Project>("/api/projects/url", { method: "POST", body: { url, settings, auto_render: autoRender } }),
+  rewrite: (id: string) => req<Project>(`${P(id)}/rewrite`, { method: "POST" }),
+  saveDefaults: (settings: Settings) => req<{ ok: boolean }>("/api/default-settings", { method: "PUT", body: { settings } }),
+  resetDefaults: () => req<{ ok: boolean }>("/api/default-settings", { method: "DELETE" }),
+  logoList: () => req<Logo[]>("/api/logos"),
+  logoDelete: (lid: string) => req<{ ok: boolean }>(`/api/logos/${lid}`, { method: "DELETE" }),
+  logoUpload: async (file: File): Promise<Logo> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch("/api/logos", { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `Lỗi ${r.status}`);
+    return d as Logo;
+  },
   cancel: (id: string) => req<Project>(`${P(id)}/cancel`, { method: "POST" }),
   retry: (id: string) => req<Project>(`${P(id)}/retry`, { method: "POST" }),
   settings: (id: string, settings: DeepPartial<Settings>) =>
@@ -172,6 +194,9 @@ type DesktopApi = {
 export const desktopApi = (): DesktopApi | undefined =>
   typeof window === "undefined" ? undefined : (window as unknown as { pywebview?: { api?: DesktopApi } }).pywebview?.api;
 
+export const logoUrl = (lid: string) => `/api/logos/${lid}/file`;
+export const stillUrl = (id: string, t: number) => `${P(id)}/still?t=${t.toFixed(2)}&n=${Date.now()}`;
+
 export const voiceSampleUrl = (voice: string) => `/api/voices/${encodeURIComponent(voice)}/sample`;
 
 export const musicUrl = (mid: string) => `/api/music/${mid}/file`;
@@ -180,11 +205,13 @@ export const fileUrl = (id: string, rel: string, v?: number | string) =>
   `${P(id)}/files/${rel}${v ? `?v=${v}` : ""}`;
 
 // XHR rather than fetch: fetch has no upload progress
-export function upload(file: File, settings: Partial<Settings>, onProgress: (x: number) => void): Promise<Project> {
+export function upload(file: File, settings: Partial<Settings>, onProgress: (x: number) => void,
+  autoRender = false): Promise<Project> {
   return new Promise((resolve, reject) => {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("settings", JSON.stringify(settings));
+    fd.append("auto_render", autoRender ? "true" : "false");
     const x = new XMLHttpRequest();
     x.open("POST", "/api/projects/upload");
     x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);

@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 
 from . import cancel
+from . import frame
 from .config import FFMPEG, SUB_FONT, fonts_rel
 from .media import MediaError, extract_audio_full, probe_audio
 
@@ -51,49 +52,164 @@ def write_transcript(segs, json_path: Path, txt_path: Path) -> None:
         "\n\n".join(f"[{_ts_srt(s['start'])}]\n{s['src']}\n{s['vi']}" for s in segs), "utf-8")
 
 
+# ASS colours are &HAABBGGRR (AA = transparency). BorderStyle 1 = outline, 3 = box behind the text.
+SUB_STYLES = {
+    "classic":    {"label": "Trắng viền đen", "text": "&H00FFFFFF", "edge": "&H00000000", "border": 1},
+    "yellow":     {"label": "Vàng viền đen", "text": "&H0000E6FF", "edge": "&H00000000", "border": 1},
+    "box_dark":   {"label": "Chữ trắng, nền đen", "text": "&H00FFFFFF", "edge": "&H50000000", "border": 3},
+    "box_yellow": {"label": "Chữ đen, nền vàng", "text": "&H00000000", "edge": "&H0000E6FF", "border": 3},
+}
+
+
 def sub_layout(media: dict, st: dict) -> tuple[int, int]:
-    """Font size and bottom margin in pixels."""
-    w, h = media["width"], media["height"]
-    size = int(0.058 * min(w, h) * st["sub_size"])
+    """Font size and bottom margin in pixels, on the output canvas."""
+    g = frame.geom(media, st["frame"])
+    W, H = g["W"], g["H"]
+    size = int(0.058 * min(W, H) * st["sub_size"])
     m = st["mask"]
+    margin = int(H * st["sub_margin"] / 100)
     if m["enabled"]:
-        band_center = h * (m["bottom"] + m["height"] / 2) / 100
-        margin = int(band_center - size * 0.6)
-    else:
-        margin = int(h * st["sub_margin"] / 100)
+        # put the Vietnamese line where the original subtitles were (now hidden under the mask)
+        band_center = media["height"] * (1 - (m["bottom"] + m["height"] / 2) / 100)
+        y = frame.map_y(g, band_center)
+        if 0 < y < H:
+            margin = int(H - y - size * 0.6)
     return size, max(0, margin)
 
 
-def write_ass(segs, duration, media, st, path: Path, offset: float = 0.0, window: float | None = None) -> None:
-    w, h = media["width"], media["height"]
-    size, margin = sub_layout(media, st)
-    outline = max(2, size // 14)
-    side = int(w * 0.06)
-    head = f"""[Script Info]
+def _ass_head(W: int, H: int, styles: list[str]) -> str:
+    return f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: {w}
-PlayResY: {h}
+PlayResX: {W}
+PlayResY: {H}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{SUB_FONT},{size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,{outline},1,2,{side},{side},{margin},1
+{chr(10).join(styles)}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
+
+
+def _clean(text: str) -> str:
+    return text.strip().replace("\n", " ").replace("{", "(").replace("}", ")")
+
+
+def logo_text_style(st: dict, W: int, H: int) -> tuple[str, str] | None:
+    """Channel name in a corner (only when no logo image is set): (style line, dialogue line)."""
+    lg = st["logo"]
+    if not lg["text"] or lg["image"]:
+        return None
+    size = max(14, int(min(W, H) * 0.035 * (lg["size"] / 0.16) ** 0.5))
+    align = {"tl": 7, "tr": 9, "bl": 1, "br": 3}[lg["position"]]
+    alpha = f"{int((1 - lg['opacity']) * 255):02X}"
+    pad = int(min(W, H) * 0.04)
+    style = (f"Style: Logo,{SUB_FONT},{size},&H{alpha}FFFFFF,&H000000FF,&H{alpha}000000,&H00000000,-1,0,0,0,"
+             f"100,100,0,0,1,{max(1, size // 12)},0,{align},{pad},{pad},{pad},1")
+    return style, f"Dialogue: 1,0:00:00.00,9:59:59.00,Logo,,0,0,0,,{_clean(lg['text'])}"
+
+
+def write_ass(segs, duration, media, st, path: Path, offset: float = 0.0, window: float | None = None,
+              subs: bool = True, only_at: float | None = None) -> None:
+    """Burned-in subtitles (+ the channel-name watermark). only_at: a single line for a still preview."""
+    g = frame.geom(media, st["frame"])
+    W, H = g["W"], g["H"]
+    size, margin = sub_layout(media, st)
+    sty = SUB_STYLES.get(st.get("sub_style"), SUB_STYLES["classic"])
+    side = int(W * 0.06)
+    if sty["border"] == 3:
+        edge_w, shadow = max(4, size // 4), 0  # box padding
+    else:
+        edge_w, shadow = max(2, size // 14), 1
+    styles = [f"Style: Default,{SUB_FONT},{size},{sty['text']},&H000000FF,{sty['edge']},&H64000000,-1,0,0,0,"
+              f"100,100,0,0,{sty['border']},{edge_w},{shadow},2,{side},{side},{margin},1"]
     rows = []
-    for i, s in enumerate(segs):
-        text = s["vi"].strip().replace("\n", " ").replace("{", "(").replace("}", ")")
-        if not text:
-            continue
-        a, b = _sub_times(segs, i, duration)
-        a, b = a - offset, b - offset
-        if b <= 0 or (window is not None and a >= window):
-            continue
-        rows.append(f"Dialogue: 0,{_ts_ass(max(0, a))},{_ts_ass(b)},Default,,0,0,0,,{text}")
-    path.write_text(head + "\n".join(rows) + "\n", "utf-8")
+    logo = logo_text_style(st, W, H)
+    if logo:
+        styles.append(logo[0])
+        rows.append(logo[1])
+    if subs and only_at is not None:
+        lines = [s for s in segs if s["vi"].strip()]
+        if lines:  # the line on screen at that moment, else the nearest one
+            best = min(lines, key=lambda s: 0 if s["start"] <= only_at <= s["end"] else abs(s["start"] - only_at))
+            rows.append(f"Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{_clean(best['vi'])}")
+    elif subs:
+        for i, s in enumerate(segs):
+            text = _clean(s["vi"])
+            if not text:
+                continue
+            a, b = _sub_times(segs, i, duration)
+            a, b = a - offset, b - offset
+            if b <= 0 or (window is not None and a >= window):
+                continue
+            rows.append(f"Dialogue: 0,{_ts_ass(max(0, a))},{_ts_ass(b)},Default,,0,0,0,,{text}")
+    path.write_text(_ass_head(W, H, styles) + "\n".join(rows) + "\n", "utf-8")
+
+
+def logo_path(st: dict) -> Path | None:
+    from . import logos
+
+    item = logos.get(st["logo"].get("image"))
+    return logos.path(item) if item and logos.path(item).exists() else None
+
+
+def logo_filter(st: dict, g: dict, logo_in: str, v_in: str, v_out: str) -> str:
+    lg = st["logo"]
+    lw = max(16, int(g["W"] * lg["size"]) // 2 * 2)
+    pad = int(min(g["W"], g["H"]) * 0.04)
+    x = pad if lg["position"] in ("tl", "bl") else f"main_w-overlay_w-{pad}"
+    y = pad if lg["position"] in ("tl", "tr") else f"main_h-overlay_h-{pad}"
+    return (f"{logo_in}scale={lw}:-2,format=rgba,colorchannelmixer=aa={lg['opacity']:.2f}[lgo];"
+            f"{v_in}[lgo]overlay={x}:{y}:format=auto{v_out}")
+
+
+def video_chain(proj: dict, ass: Path | None, cwd: Path, logo_in: str | None) -> tuple[list[str], str]:
+    """Mask the original subtitles -> reframe -> burn subtitles/watermark -> logo. Returns (filters, label)."""
+    st, media = proj["settings"], proj["media"]
+    chain, v = [], "[0:v]"
+    if st["mask"]["enabled"]:
+        chain.append(mask_filter(st["mask"], v, "[vm]"))
+        v = "[vm]"
+    g = frame.geom(media, st["frame"])
+    if g["active"]:
+        chain.append(frame.video_filter(g, v, "[vf]"))
+        v = "[vf]"
+    if ass:
+        chain.append(f"{v}subtitles=filename={ass.name}:fontsdir={fonts_rel(cwd)}[vs]")
+        v = "[vs]"
+    if logo_in:
+        chain.append(logo_filter(st, g, logo_in, v, "[vl]"))
+        v = "[vl]"
+    return chain, v
+
+
+def still(proj_dir: Path, proj: dict, t: float, out: Path, width: int | None = None) -> Path:
+    """One frame exactly as the export will look (framing, mask, subtitle style, logo)."""
+    src = proj_dir / proj["source"]["file"]
+    st = proj["settings"]
+    ass = None
+    if st["subtitle_mode"] == "burn" or logo_text_style(st, 2, 2):
+        ass = proj_dir / "still.ass"
+        write_ass(proj["segments"], proj["media"]["duration"], proj["media"], st, ass,
+                  subs=st["subtitle_mode"] == "burn", only_at=t)
+    cmd = [FFMPEG, "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", str(src)]
+    lp = logo_path(st)
+    if lp:
+        cmd += ["-i", str(lp)]
+    chain, v = video_chain(proj, ass, proj_dir, "[1:v]" if lp else None)
+    if width:
+        chain.append(f"{v}scale={width}:-2[vw]")
+        v = "[vw]"
+    if not chain:
+        chain, v = ["[0:v]null[vn]"], "[vn]"
+    cmd += ["-filter_complex", ";".join(chain), "-map", v, "-frames:v", "1", "-q:v", "3", str(out)]
+    r = cancel.run(cmd, timeout=60, cwd=proj_dir)
+    if r.returncode != 0 or not out.exists():
+        raise MediaError("Không tạo được ảnh xem trước:\n" + r.stderr[-400:])
+    return out
 
 
 def separate_background(proj_dir: Path, src: Path) -> Path:
@@ -123,7 +239,7 @@ def separate_background(proj_dir: Path, src: Path) -> Path:
 
 
 def mask_filter(m: dict, v_in: str, v_out: str) -> str:
-    """Blur or black out the band where the original (Chinese) subtitles sit."""
+    """Blur or black out the band where the original subtitles sit (on the source picture)."""
     y = f"ih*{(100 - m['bottom'] - m['height']) / 100:.4f}"
     bh = f"ih*{m['height'] / 100:.4f}"
     if m["style"] == "box":
@@ -157,18 +273,14 @@ def music_path(proj: dict) -> Path | None:
 
 
 def build_filters(proj_dir: Path, proj: dict, bg_label: str | None, start: float, length: float | None,
-                  music_label: str | None = None) -> str:
+                  music_label: str | None = None, logo_label: str | None = None) -> str:
     st, media = proj["settings"], proj["media"]
-    chain = []
-    v = "[0:v]"
-    if st["mask"]["enabled"]:
-        chain.append(mask_filter(st["mask"], v, "[vm]"))
-        v = "[vm]"
-    if st["subtitle_mode"] == "burn":
+    ass = None
+    if st["subtitle_mode"] == "burn" or logo_text_style(st, 2, 2):
         ass = proj_dir / ("subs_preview.ass" if length else "subs.ass")
-        write_ass(proj["segments"], media["duration"], media, st, ass, offset=start, window=length)
-        chain.append(f"{v}subtitles=filename={ass.name}:fontsdir={fonts_rel(proj_dir)}[vs]")
-        v = "[vs]"
+        write_ass(proj["segments"], media["duration"], media, st, ass, offset=start, window=length,
+                  subs=st["subtitle_mode"] == "burn")
+    chain, v = video_chain(proj, ass, proj_dir, f"[{logo_label}]" if logo_label else None)
     if v == "[0:v]":
         chain.append("[0:v]null[vout]")
     else:
@@ -237,7 +349,12 @@ def render(proj_dir: Path, proj: dict, out: Path, bg: Path | None,
         n = sum(1 for x in cmd if x == "-i")
         cmd += ["-stream_loop", "-1", "-ss", f"{offset:.3f}", "-i", str(track)]
         music_label = f"{n}:a"
-    filters = build_filters(proj_dir, proj, bg_label, start, length, music_label)
+    logo_label = None
+    lp = logo_path(proj["settings"])
+    if lp:
+        logo_label = f"{sum(1 for x in cmd if x == '-i')}:v"
+        cmd += ["-i", str(lp)]
+    filters = build_filters(proj_dir, proj, bg_label, start, length, music_label, logo_label)
     cmd += ["-filter_complex", filters, "-map", "[vout]", "-map", "[aout]"]
     cmd += ["-t", f"{(length or media['duration']):.3f}"]
     cmd += ["-c:v", "libx264", "-preset", "ultrafast" if length else "veryfast", "-crf", "20",

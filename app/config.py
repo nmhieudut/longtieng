@@ -250,6 +250,23 @@ DEFAULT_SETTINGS = {
         "duck": True,          # lower the music while the dub voice speaks
         "start": 0.0,          # skip the intro: start the track at this second
     },
+    "frame": {
+        "aspect": "original",  # "original" | "9:16" | "16:9" | "1:1" | "4:5"
+        "fit": "blur",         # "blur": whole video on a blurred copy of itself | "crop": fill, cut the edges
+        "zoom": 1.0,           # 1.0 – 2.0
+    },
+    "logo": {
+        "image": None,         # id in the shared logo library
+        "text": "",            # or a channel name, e.g. "@kenhcuatoi"
+        "position": "tr",      # tl | tr | bl | br
+        "size": 0.16,          # logo width as a fraction of the video width
+        "opacity": 0.85,
+    },
+    "sub_style": "classic",    # see render.SUB_STYLES
+    "script": {
+        "mode": "translate",   # "translate": faithful | "review": AI narration in a chosen style
+        "style": "drama",      # see translate.REVIEW_STYLES
+    },
     "mask": {
         "enabled": False,
         "auto": True,          # detect the burned-in subtitle band with OCR

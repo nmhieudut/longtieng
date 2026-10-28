@@ -56,10 +56,37 @@ def clean_settings(s: dict) -> dict:
     m = s["mask"]
     m["bottom"] = min(90, max(0, float(m["bottom"])))
     m["height"] = min(50, max(2, float(m["height"])))
+    fr = s["frame"]
+    fr["zoom"] = min(2.0, max(1.0, float(fr["zoom"])))
+    lg = s["logo"]
+    lg["text"] = str(lg["text"] or "").strip()[:40]
+    lg["size"] = min(0.4, max(0.05, float(lg["size"])))
+    lg["opacity"] = min(1.0, max(0.2, float(lg["opacity"])))
+    if lg["image"] is not None and not isinstance(lg["image"], str):
+        lg["image"] = None
     return s
 
 
-def create(title: str, source: dict, settings: dict) -> dict:
+# Settings worth carrying over to new videos ("Lưu làm mặc định"); the subtitle band is per video.
+DEFAULT_KEYS = ("lang", "voice", "rate", "audio_mode", "orig_volume", "subtitle_mode", "sub_size", "sub_margin",
+                "music", "frame", "logo", "sub_style", "script")
+
+
+def user_defaults() -> dict:
+    from .config import user_settings
+    d = user_settings().get("defaults") or {}
+    out = {k: d[k] for k in DEFAULT_KEYS if k in d}
+    if isinstance(d.get("mask"), dict):
+        out["mask"] = {k: d["mask"][k] for k in ("auto", "style") if k in d["mask"]}
+    return out
+
+
+def new_settings(given: dict) -> dict:
+    """Settings for a new video: built-in defaults < the user's saved defaults < what the form sent."""
+    return clean_settings(_merge(_merge(DEFAULT_SETTINGS, user_defaults()), given or {}))
+
+
+def create(title: str, source: dict, settings: dict, auto_render: bool = False) -> dict:
     pid = "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(10))
     d = DATA_DIR / pid
     (d / "tts").mkdir(parents=True)
@@ -70,11 +97,12 @@ def create(title: str, source: dict, settings: dict) -> dict:
         "created": time.time(),
         "source": source,
         "media": None,
-        "settings": clean_settings(settings),
+        "settings": settings,
         "status": {"stage": "queued", "progress": 0, "message": "Đang chờ xử lý…", "error": None},
         "warnings": [],
         "segments": [],
         "outputs": {},
+        "auto_render": bool(auto_render),  # batch: export as soon as the translation is ready
     }
     save(proj)
     return proj
@@ -82,7 +110,10 @@ def create(title: str, source: dict, settings: dict) -> dict:
 
 def load(pid: str) -> dict:
     with _lock(pid):
-        return json.loads((pdir(pid) / "project.json").read_text("utf-8"))
+        p = json.loads((pdir(pid) / "project.json").read_text("utf-8"))
+    # projects made by older versions lack newer settings keys
+    p["settings"] = clean_settings(p["settings"])
+    return p
 
 
 def save(proj: dict) -> None:

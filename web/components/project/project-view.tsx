@@ -223,6 +223,11 @@ export function ProjectView({ id }: { id: string }) {
             </TabsContent>
             <TabsContent value="settings" className="min-h-0 flex-1 overflow-y-auto">
               <SettingsPanel
+                projectId={id}
+                previewAt={previewAt}
+                subStyles={cfg?.sub_styles ?? {}}
+                reviewStyles={cfg?.review_styles ?? {}}
+                onRewrite={async () => { await run(() => api.rewrite(id)); }}
                 settings={p.settings}
                 voices={cfg?.voices ?? {}}
                 canDemucs={cfg?.features.demucs ?? false}

@@ -8,9 +8,9 @@ from pathlib import Path
 import numpy as np
 
 from . import cancel
-from .config import FFMPEG, OPENAI_MODEL, SUB_FONT, fonts_rel, openai_key
+from . import frame, render
+from .config import FFMPEG, OPENAI_MODEL, SUB_FONT, openai_key
 from .media import MediaError
-from .render import mask_filter
 
 CAPTION_SYSTEM = """Bạn là admin một fanpage Facebook giải trí/review ở Việt Nam, chuyên đăng Reels lồng tiếng video Douyin.
 Dựa vào nội dung video (bản dịch tiếng Việt), viết caption để đăng Reels:
@@ -110,23 +110,20 @@ def candidates(proj_dir: Path, proj: dict, n: int = 6) -> list[dict]:
 
 
 def _frame(proj: dict, src: Path, t: float, out: Path, width: int | None = None, ass: Path | None = None) -> None:
-    chain, v = [], "[0:v]"
-    m = proj["settings"]["mask"]
-    if m["enabled"]:
-        chain.append(mask_filter(m, v, "[vm]"))
-        v = "[vm]"
-    if ass:
-        chain.append(f"{v}subtitles=filename={ass.name}:fontsdir={fonts_rel(ass.parent)}[vt]")
-        v = "[vt]"
+    """A frame as it will look in the export (mask, framing, logo) plus an optional ASS overlay (the title)."""
+    cwd = ass.parent if ass else out.parent
+    cmd = [FFMPEG, "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", str(src)]
+    lp = render.logo_path(proj["settings"])
+    if lp:
+        cmd += ["-i", str(lp)]
+    chain, v = render.video_chain(proj, ass, cwd, "[1:v]" if lp else None)
     if width:
-        chain.append(f"{v}scale={width}:-2[vs]")
-        v = "[vs]"
+        chain.append(f"{v}scale={width}:-2[vw]")
+        v = "[vw]"
     if not chain:
-        chain.append("[0:v]null[vs]")
-        v = "[vs]"
-    cmd = [FFMPEG, "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", str(src), "-filter_complex", ";".join(chain),
-           "-map", v, "-frames:v", "1", "-q:v", "2", str(out)]
-    r = cancel.run(cmd, timeout=60, cwd=ass.parent if ass else None)
+        chain, v = ["[0:v]null[vn]"], "[vn]"
+    cmd += ["-filter_complex", ";".join(chain), "-map", v, "-frames:v", "1", "-q:v", "2", str(out)]
+    r = cancel.run(cmd, timeout=60, cwd=cwd)
     if r.returncode != 0 or not out.exists():
         raise MediaError("Không tạo được ảnh:\n" + r.stderr[-400:])
 
@@ -141,7 +138,7 @@ def strip_emoji(s: str) -> str:
 def cover(proj_dir: Path, proj: dict, t: float, title: str, position: str) -> Path:
     """Full-size cover JPG: the frame at t (original subs masked) + big title text."""
     media = proj["media"]
-    w, h = media["width"], media["height"]
+    w, h = frame.canvas(media, proj["settings"]["frame"])  # the title is laid out on the output frame
     src = proj_dir / proj["source"]["file"]
     out_dir = proj_dir / "thumbs"
     out_dir.mkdir(exist_ok=True)
