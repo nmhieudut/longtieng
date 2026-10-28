@@ -164,11 +164,15 @@ def _shutdown(server) -> None:
 def _reattach_stdio() -> None:
     """Windowed build started with redirected pipes (yt-dlp child, selftest): use them."""
     for name, fd in (("stdout", 1), ("stderr", 2)):
-        if getattr(sys, name) is None:
+        stream = getattr(sys, name)
+        if stream is None:
             try:
                 setattr(sys, name, open(fd, "w", encoding="utf-8", buffering=1, closefd=False))
             except OSError:
                 pass
+        elif hasattr(stream, "reconfigure"):
+            # Windows pipes default to cp1252, which can't print Vietnamese ("ẵ") and raises
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def _run_ytdlp(args: list[str]) -> None:
