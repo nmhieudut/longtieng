@@ -28,6 +28,14 @@ def _step(name, fn):
         raise RuntimeError(name) from e
 
 
+def _check_dotnet():
+    """pywebview draws the Windows window through pythonnet; this is what fails on a blocked download."""
+    if sys.platform != "win32":
+        return
+    import clr  # noqa: F401  loads Python.Runtime.dll
+    clr.AddReference("System.Windows.Forms")
+
+
 def run() -> int:
     import faulthandler
 
@@ -46,6 +54,7 @@ def run() -> int:
         _step("yt-dlp", lambda: _check_ytdlp(config))
         _step("OCR sẵn sàng", lambda: _check_ocr(ocr))
         _step("webview import", lambda: __import__("webview") and None)
+        _step(".NET cho cửa sổ (pythonnet)", _check_dotnet)
         clip = _step("tạo video thử", lambda: _make_clip(config, home))
         if stt.engine() == "mlx" and not _metal_ok():
             # GitHub's macOS runners are VMs without a usable GPU; the same app is tested on a real Mac

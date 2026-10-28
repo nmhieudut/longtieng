@@ -53,7 +53,22 @@ def _pick_code_dir() -> Path:
     return current
 
 
+def _unblock_windows() -> None:
+    """A zip downloaded from the internet marks every file inside as "from the internet"
+    (Zone.Identifier stream). .NET then refuses to load those DLLs, so pywebview's window fails with
+    "Failed to resolve Python.Runtime.Loader.Initialize". Drop the mark from our own DLLs."""
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return
+    root = Path(sys.executable).parent
+    for dll in root.rglob("*.dll"):
+        try:
+            os.remove(f"{dll}:Zone.Identifier")
+        except OSError:
+            pass  # not marked (the usual case), or not NTFS
+
+
 def main() -> None:
+    _unblock_windows()
     code = _pick_code_dir()
     sys.path.insert(0, str(code))
     os.environ["LONGTIENG_CODE_DIR"] = str(code)

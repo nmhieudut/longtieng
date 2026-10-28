@@ -20,6 +20,12 @@ Remove-Item build/bin/ffplay.exe -ErrorAction SilentlyContinue
 uv run python packaging/make_patch.py --dir build/code
 uv run pyinstaller --noconfirm --clean --distpath dist --workpath build/pyinstaller packaging/longtieng.spec
 
+# Act like a browser download: mark the DLLs "from the internet" (the launcher must clear this,
+# otherwise .NET won't load Python.Runtime.dll and the window can't open)
+Get-ChildItem dist/Longtieng -Recurse -Filter *.dll | ForEach-Object {
+  Set-Content -LiteralPath $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
+}
+
 # GUI exe: run it with redirected output and wait, so we see the log and the exit code
 $p = Start-Process dist/Longtieng/Longtieng.exe -ArgumentList "--selftest" -Wait -PassThru -NoNewWindow `
   -RedirectStandardOutput build/selftest.out -RedirectStandardError build/selftest.err
