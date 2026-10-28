@@ -2,7 +2,7 @@
 
 import json
 
-from .config import OPENAI_API_KEY, OPENAI_MODEL, VI_CHARS_PER_SEC
+from .config import OPENAI_MODEL, VI_CHARS_PER_SEC, openai_key
 
 BATCH = 40
 CONTEXT = 6
@@ -30,7 +30,7 @@ def translate_all(segs: list[dict], duration: float, src_lang: str, rate: float,
     """Fills seg['vi'] in place. Returns list of warnings."""
     warnings = []
     todo = list(range(len(segs)))
-    if OPENAI_API_KEY:
+    if openai_key():
         try:
             _openai(segs, duration, rate, on_progress)
         except Exception as e:  # auth / quota / network — fall back to Google
@@ -39,7 +39,7 @@ def translate_all(segs: list[dict], duration: float, src_lang: str, rate: float,
         if todo and not warnings:
             warnings.append(f"{len(todo)} câu OpenAI trả thiếu, đã dịch bằng Google.")
     else:
-        warnings.append("Chưa có OPENAI_API_KEY, đang dùng Google Dịch (chất lượng thấp hơn).")
+        warnings.append("Chưa nhập OpenAI API key, đang dùng Google Dịch (chất lượng thấp hơn).")
     if todo:
         _google(segs, todo, src_lang, on_progress)
     missing = sum(1 for s in segs if not s["vi"].strip())
@@ -51,7 +51,7 @@ def translate_all(segs: list[dict], duration: float, src_lang: str, rate: float,
 def _openai(segs, duration, rate, on_progress):
     from openai import OpenAI
 
-    client = OpenAI(api_key=OPENAI_API_KEY, max_retries=2, timeout=90)
+    client = OpenAI(api_key=openai_key(), max_retries=2, timeout=90)
     done_ctx: list[str] = []
     for b in range(0, len(segs), BATCH):
         chunk = range(b, min(b + BATCH, len(segs)))

@@ -16,6 +16,7 @@ import type { DeepPartial, Project, Settings, VoiceInfo } from "@/lib/api";
 type Props = {
   settings: Settings;
   voices: Record<string, VoiceInfo>;
+  canDemucs: boolean;
   disabled: boolean;
   onDraft: (s: Settings) => void;              // live, for the mask overlay
   onSave: (patch: DeepPartial<Settings>) => Promise<void>;
@@ -23,7 +24,7 @@ type Props = {
   onDetect: () => Promise<void>;
 };
 
-export function SettingsPanel({ settings, voices, disabled, onDraft, onSave, maskDetect, onDetect }: Props) {
+export function SettingsPanel({ settings, voices, canDemucs, disabled, onDraft, onSave, maskDetect, onDetect }: Props) {
   const [detecting, setDetecting] = useState(false);
   const [s, setS] = useState(settings);
   const pending = useRef<DeepPartial<Settings>>({});
@@ -73,7 +74,9 @@ export function SettingsPanel({ settings, voices, disabled, onDraft, onSave, mas
         <ToggleGroup type="single" variant="outline" className="w-full" disabled={disabled}
           value={s.audio_mode} onValueChange={(v) => v && change({ audio_mode: v as Settings["audio_mode"] })}>
           <ToggleGroupItem value="duck" className="flex-1">Giảm nhỏ</ToggleGroupItem>
-          <ToggleGroupItem value="demucs" className="flex-1">Giữ nhạc nền</ToggleGroupItem>
+          {(canDemucs || s.audio_mode === "demucs") && (
+            <ToggleGroupItem value="demucs" className="flex-1">Giữ nhạc nền</ToggleGroupItem>
+          )}
           <ToggleGroupItem value="mute" className="flex-1">Tắt</ToggleGroupItem>
         </ToggleGroup>
         <p className="text-xs text-muted-foreground">

@@ -73,6 +73,16 @@ export type Config = {
   max_upload_mb: number;
   max_duration_min: number;
   translator: string;
+  features: { demucs: boolean };
+  desktop: boolean;
+};
+
+export type AppSettings = {
+  openai_key_set: boolean;
+  openai_key_hint: string;
+  stt_engine: string;
+  stt_model_ready: boolean;
+  data_dir: string;
 };
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -104,6 +114,9 @@ const P = (id: string) => `/api/projects/${id}`;
 
 export const api = {
   config: () => req<Config>("/api/config"),
+  appSettings: () => req<AppSettings>("/api/app-settings"),
+  saveAppSettings: (patch: { openai_key?: string }) =>
+    req<AppSettings>("/api/app-settings", { method: "PUT", body: patch }),
   list: () => req<ProjectSummary[]>("/api/projects"),
   get: (id: string) => req<Project>(P(id)),
   remove: (id: string) => req<{ ok: boolean }>(P(id), { method: "DELETE" }),
@@ -135,6 +148,15 @@ export const api = {
   render: (id: string, previewStart: number | null) =>
     req<Project>(`${P(id)}/render`, { method: "POST", body: { preview_start: previewStart } }),
 };
+
+/** Native helpers exposed by the desktop app (pywebview); undefined in a normal browser. */
+type DesktopApi = {
+  save_file: (url: string) => Promise<{ saved?: string; cancelled?: boolean; error?: string }>;
+  reveal: (path: string) => Promise<void>;
+  copy: (text: string) => Promise<void>;
+};
+export const desktopApi = (): DesktopApi | undefined =>
+  typeof window === "undefined" ? undefined : (window as unknown as { pywebview?: { api?: DesktopApi } }).pywebview?.api;
 
 export const voiceSampleUrl = (voice: string) => `/api/voices/${encodeURIComponent(voice)}/sample`;
 
@@ -180,6 +202,11 @@ export function ttsFresh(s: Segment, st: Settings) {
 
 /** Clipboard API needs a secure context (localhost is fine, http://192.168… is not). */
 export async function copyText(text: string) {
+  const bridge = desktopApi();
+  if (bridge) {
+    await bridge.copy(text);
+    return;
+  }
   try {
     await navigator.clipboard.writeText(text);
     return;

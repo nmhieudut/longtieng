@@ -1,46 +1,155 @@
+import json
 import os
 import shutil
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(ROOT / ".env")
+# Packaged desktop app (PyInstaller): bundled files live in _MEIPASS, user data in the OS app-data folder
+FROZEN = bool(getattr(sys, "frozen", False))
+RES_DIR = Path(getattr(sys, "_MEIPASS", ROOT))
+IS_WIN = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
 
-DATA_DIR = ROOT / "data" / "projects"
-WEB_DIR = ROOT / "web" / "out"  # Next.js static export
+
+def _user_dir() -> Path:
+    if os.getenv("LONGTIENG_HOME"):
+        return Path(os.environ["LONGTIENG_HOME"]).expanduser()
+    if not FROZEN:
+        return ROOT / "data"  # running from source: keep everything inside the repo
+    if IS_WIN:
+        return Path(os.getenv("APPDATA") or Path.home() / "AppData" / "Roaming") / "Longtieng"
+    if IS_MAC:
+        return Path.home() / "Library" / "Application Support" / "Longtieng"
+    return Path.home() / ".local" / "share" / "longtieng"
+
+
+USER_DIR = _user_dir()
+USER_DIR.mkdir(parents=True, exist_ok=True)
+if not FROZEN:
+    load_dotenv(ROOT / ".env")
+load_dotenv(USER_DIR / ".env")
+if FROZEN:
+    # Whisper models stay in the standard ~/.cache/huggingface, shared with other tools (no re-download)
+    try:  # frozen apps often can't find the system CA store -> every HTTPS call fails
+        import certifi
+        os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    except ImportError:
+        pass
+
+DATA_DIR = USER_DIR / "projects"
+WEB_DIR = RES_DIR / "web" / "out"  # Next.js static export
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+# ---------- settings the user edits inside the app (API key, ...)
 
-def _bin(env: str, brew_path: str, name: str) -> str:
+_SETTINGS_FILE = USER_DIR / "settings.json"
+
+
+def user_settings() -> dict:
+    try:
+        return json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_user_settings(patch: dict) -> dict:
+    s = user_settings()
+    s.update(patch)
+    tmp = _SETTINGS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(_SETTINGS_FILE)
+    return s
+
+
+def openai_key() -> str:
+    """Key typed in the app wins over OPENAI_API_KEY from .env."""
+    return (user_settings().get("openai_key") or os.getenv("OPENAI_API_KEY", "")).strip()
+
+
+# ---------- bundled tools
+
+_EXE = ".exe" if IS_WIN else ""
+
+
+def _bin(env: str, name: str, brew_path: str = "") -> str:
     if os.getenv(env):
         return os.environ[env]
+    bundled = RES_DIR / "bin" / f"{name}{_EXE}"
+    if bundled.exists():
+        return str(bundled)
     # ffmpeg-full is keg-only, so the plain `ffmpeg` on PATH has no libass
-    if Path(brew_path).exists():
+    if brew_path and Path(brew_path).exists():
         return brew_path
     return shutil.which(name) or name
 
 
-FFMPEG = _bin("FFMPEG", "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg", "ffmpeg")
-FFPROBE = _bin("FFPROBE", "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe", "ffprobe")
-YTDLP = shutil.which("yt-dlp") or "yt-dlp"
+FFMPEG = _bin("FFMPEG", "ffmpeg", "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg")
+FFPROBE = _bin("FFPROBE", "ffprobe", "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe")
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+
+def _ytdlp_cmd() -> list[str]:
+    """The packaged app runs yt-dlp as itself (`Longtieng --yt-dlp ...`), so it stays killable by Huỷ."""
+    if os.getenv("YTDLP"):
+        return [os.environ["YTDLP"]]
+    if FROZEN:
+        return [sys.executable, "--yt-dlp"]
+    found = shutil.which("yt-dlp")
+    return [found] if found else [sys.executable, "-m", "yt_dlp"]
+
+
+YTDLP_CMD = _ytdlp_cmd()
+
+
+
+def demucs_available() -> bool:
+    """demucs needs torch (~2GB), so the desktop build leaves it out."""
+    if FROZEN:
+        return False
+    import importlib.util
+    return importlib.util.find_spec("demucs") is not None
+
+
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo")
 YTDLP_COOKIES_BROWSER = os.getenv("YTDLP_COOKIES_BROWSER", "").strip()
 # cookies.txt (Netscape format) exported from the browser; used instead of the browser when set
 YTDLP_COOKIES_FILE = os.path.expanduser(os.getenv("YTDLP_COOKIES_FILE", "").strip())
 if YTDLP_COOKIES_FILE and not os.path.isabs(YTDLP_COOKIES_FILE):
-    YTDLP_COOKIES_FILE = str(ROOT / YTDLP_COOKIES_FILE)
+    YTDLP_COOKIES_FILE = str((ROOT if not FROZEN else USER_DIR) / YTDLP_COOKIES_FILE)
 
 ALLOW_LAN = os.getenv("ALLOW_LAN", "0") == "1"
 PORT = int(os.getenv("PORT", "8000"))
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "500"))
 MAX_DURATION_MIN = float(os.getenv("MAX_DURATION_MIN", "15"))
 
-FONTS_DIR = "/System/Library/Fonts/Supplemental"
-SUB_FONT = "Arial"
+# Subtitle font ships with the app (full Vietnamese glyphs, same look on Mac and Windows).
+# ffmpeg's filter parser chokes on "C:\\..." paths, so filters reference fonts by a path relative
+# to their working directory; copying them under USER_DIR keeps that path on the same drive.
+SUB_FONT = "Be Vietnam Pro"
+FONTS_DIR = USER_DIR / "fonts"
+FONTS_DIR.mkdir(exist_ok=True)
+for _f in (RES_DIR / "assets" / "fonts").glob("*.ttf"):
+    _dst = FONTS_DIR / _f.name
+    if not _dst.exists() or _dst.stat().st_size != _f.stat().st_size:
+        shutil.copyfile(_f, _dst)
+
+# Bundled ffmpeg builds use fontconfig, which looks for a config that doesn't exist on the
+# user's machine. Point it at a tiny one that only knows our font folder.
+if FROZEN or os.getenv("LONGTIENG_FONTCONFIG"):
+    _fc = USER_DIR / "fontconfig.conf"  # not inside FONTS_DIR: libass tries to load every file there
+    _fc.write_text(
+        f"""<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig>
+  <dir>{FONTS_DIR}</dir>\n  <cachedir>{USER_DIR / "fontcache"}</cachedir>\n</fontconfig>\n""",
+        encoding="utf-8")
+    os.environ["FONTCONFIG_FILE"] = str(_fc)
+
+
+def fonts_rel(cwd: Path) -> str:
+    """fontsdir= value for an ffmpeg filter that runs with this working directory."""
+    return os.path.relpath(FONTS_DIR, cwd).replace("\\", "/")
+
 
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip()
 
@@ -67,10 +176,10 @@ def _voices() -> dict[str, dict]:
     ]
     for vid, name, g in multi:
         add(vid, name, "Đa ngôn ngữ (Edge, miễn phí)", g, "Có thể hơi lơ lớ")
-    if OPENAI_API_KEY:
-        for name, g in [("coral", "nữ"), ("nova", "nữ"), ("shimmer", "nữ"), ("sage", "nữ"),
-                        ("ash", "nam"), ("onyx", "nam"), ("echo", "nam"), ("verse", "nam")]:
-            add(f"openai:{name}", name.capitalize(), "OpenAI (tốn phí ~0,015$/phút)", g, "Biểu cảm hơn, đọc chậm hơn")
+    # listed even without a key so the picker is stable; dub.py says when the key is missing
+    for name, g in [("coral", "nữ"), ("nova", "nữ"), ("shimmer", "nữ"), ("sage", "nữ"),
+                    ("ash", "nam"), ("onyx", "nam"), ("echo", "nam"), ("verse", "nam")]:
+        add(f"openai:{name}", name.capitalize(), "OpenAI (cần API key, ~0,015$/phút)", g, "Biểu cảm hơn, đọc chậm hơn")
     return v
 
 

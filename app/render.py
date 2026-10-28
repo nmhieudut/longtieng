@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 
 from . import cancel
-from .config import FFMPEG, FONTS_DIR, SUB_FONT
+from .config import FFMPEG, SUB_FONT, fonts_rel
 from .media import MediaError, extract_audio_full, probe_audio
 
 
@@ -167,7 +167,7 @@ def build_filters(proj_dir: Path, proj: dict, bg_label: str | None, start: float
     if st["subtitle_mode"] == "burn":
         ass = proj_dir / ("subs_preview.ass" if length else "subs.ass")
         write_ass(proj["segments"], media["duration"], media, st, ass, offset=start, window=length)
-        chain.append(f"{v}subtitles=filename={ass.name}:fontsdir={FONTS_DIR}[vs]")
+        chain.append(f"{v}subtitles=filename={ass.name}:fontsdir={fonts_rel(proj_dir)}[vs]")
         v = "[vs]"
     if v == "[0:v]":
         chain.append("[0:v]null[vout]")

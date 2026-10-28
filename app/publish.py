@@ -2,13 +2,13 @@
 
 import json
 import re
-import subprocess
 import unicodedata
 from pathlib import Path
 
 import numpy as np
 
-from .config import FFMPEG, FONTS_DIR, OPENAI_API_KEY, OPENAI_MODEL
+from . import cancel
+from .config import FFMPEG, OPENAI_MODEL, SUB_FONT, fonts_rel, openai_key
 from .media import MediaError
 from .render import mask_filter
 
@@ -29,14 +29,14 @@ def _no_accents(s: str) -> str:
 
 
 def make_caption(proj: dict) -> dict:
-    if not OPENAI_API_KEY:
-        raise MediaError("Cần OPENAI_API_KEY trong .env để AI viết caption.")
+    if not openai_key():
+        raise MediaError("Cần OpenAI API key để AI viết caption. Nhập key trong Cài đặt (biểu tượng bánh răng).")
     from openai import OpenAI
 
     lines = [s["vi"].strip() for s in proj["segments"] if s["vi"].strip()]
     text = "\n".join(lines)[:6000]
     user = {"tieu_de_goc": proj.get("title", ""), "noi_dung_video": text}
-    client = OpenAI(api_key=OPENAI_API_KEY, max_retries=2, timeout=60)
+    client = OpenAI(api_key=openai_key(), max_retries=2, timeout=60)
     r = client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[{"role": "system", "content": CAPTION_SYSTEM},
@@ -62,8 +62,8 @@ def make_caption(proj: dict) -> dict:
 # ---------- cover image
 
 def _grab_gray(src: Path, t: float, w: int = 160) -> np.ndarray | None:
-    r = subprocess.run([FFMPEG, "-v", "error", "-ss", f"{t:.2f}", "-i", str(src), "-frames:v", "1",
-                        "-vf", f"scale={w}:-2,format=gray", "-f", "rawvideo", "-"], capture_output=True, timeout=60)
+    r = cancel.run([FFMPEG, "-v", "error", "-ss", f"{t:.2f}", "-i", str(src), "-frames:v", "1",
+                    "-vf", f"scale={w}:-2,format=gray", "-f", "rawvideo", "-"], timeout=60, text=False)
     if r.returncode != 0 or not r.stdout:
         return None
     a = np.frombuffer(r.stdout, np.uint8).astype(np.float32)
@@ -116,7 +116,7 @@ def _frame(proj: dict, src: Path, t: float, out: Path, width: int | None = None,
         chain.append(mask_filter(m, v, "[vm]"))
         v = "[vm]"
     if ass:
-        chain.append(f"{v}subtitles=filename={ass.name}:fontsdir={FONTS_DIR}[vt]")
+        chain.append(f"{v}subtitles=filename={ass.name}:fontsdir={fonts_rel(ass.parent)}[vt]")
         v = "[vt]"
     if width:
         chain.append(f"{v}scale={width}:-2[vs]")
@@ -126,7 +126,7 @@ def _frame(proj: dict, src: Path, t: float, out: Path, width: int | None = None,
         v = "[vs]"
     cmd = [FFMPEG, "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", str(src), "-filter_complex", ";".join(chain),
            "-map", v, "-frames:v", "1", "-q:v", "2", str(out)]
-    r = subprocess.run(cmd, capture_output=True, text=True, cwd=ass.parent if ass else None, timeout=60)
+    r = cancel.run(cmd, timeout=60, cwd=ass.parent if ass else None)
     if r.returncode != 0 or not out.exists():
         raise MediaError("Không tạo được ảnh:\n" + r.stderr[-400:])
 
@@ -163,7 +163,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: T,Arial,{size},&H00FFFFFF,&H000000FF,&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,{max(4, size // 9)},{max(2, size // 18)},{align},{side},{side},{margin_v},1
+Style: T,{SUB_FONT},{size},&H00FFFFFF,&H000000FF,&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,{max(4, size // 9)},{max(2, size // 18)},{align},{side},{side},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

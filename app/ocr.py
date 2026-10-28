@@ -1,11 +1,13 @@
-"""Find the burned-in subtitle band with Apple Vision OCR (macOS, runs locally).
+"""Find the burned-in subtitle band with OCR, locally: Apple Vision on macOS, RapidOCR elsewhere.
 
 Idea: grab frames while people are talking, read the text on them, and keep the
 horizontal band where text shows up in many frames *and changes* between frames.
 Static text (watermarks, channel names, titles) repeats the same string, so it is ignored.
 """
 
+import os
 import re
+import sys
 import tempfile
 from collections import defaultdict
 from pathlib import Path
@@ -17,9 +19,19 @@ _CJK = re.compile("[\u4e00-\u9fff]")
 MAX_FRAMES = 14
 
 
+def _engine() -> str:
+    forced = os.getenv("LONGTIENG_OCR", "").strip()
+    if forced in ("vision", "rapid"):
+        return forced
+    return "vision" if sys.platform == "darwin" else "rapid"
+
+
 def available() -> bool:
     try:
-        import Vision  # noqa: F401
+        if _engine() == "vision":
+            import Vision  # noqa: F401
+        else:
+            import rapidocr_onnxruntime  # noqa: F401
         return True
     except ImportError:
         return False
@@ -27,6 +39,10 @@ def available() -> bool:
 
 def _read_text(png: Path) -> list[dict]:
     """Text lines on one image. y/h are fractions of the height, measured from the BOTTOM."""
+    return _read_vision(png) if _engine() == "vision" else _read_rapid(png)
+
+
+def _read_vision(png: Path) -> list[dict]:
     import Vision
     from Foundation import NSURL
 
@@ -46,6 +62,33 @@ def _read_text(png: Path) -> list[dict]:
         text = str(cands[0].string())
         bb = obs.boundingBox()
         out.append({"text": text, "y": bb.origin.y, "h": bb.size.height, "w": bb.size.width})
+    return out
+
+
+_rapid = None
+
+
+def _read_rapid(png: Path) -> list[dict]:
+    global _rapid
+    import numpy as np
+    from rapidocr_onnxruntime import RapidOCR
+
+    import cv2
+
+    if _rapid is None:
+        _rapid = RapidOCR()
+
+    img = cv2.imdecode(np.fromfile(str(png), dtype=np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return []
+    H, W = img.shape[:2]
+    result, _ = _rapid(img)
+    out = []
+    for box, text, _score in result or []:
+        xs = [pt[0] for pt in box]
+        ys = [pt[1] for pt in box]  # pixels, measured from the TOP
+        top, bottom = min(ys), max(ys)
+        out.append({"text": text, "y": 1 - bottom / H, "h": (bottom - top) / H, "w": (max(xs) - min(xs)) / W})
     return out
 
 

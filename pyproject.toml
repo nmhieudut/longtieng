@@ -1,14 +1,21 @@
 [project]
 name = "longtieng"
 version = "0.1.0"
-description = "Web app lồng tiếng video cá nhân (Trung → Việt)"
+description = "App lồng tiếng video cá nhân (Trung → Việt) cho Mac và Windows"
 requires-python = ">=3.12"
 dependencies = [
     "deep-translator>=1.11.4",
     "edge-tts>=7.3.1",
     "fastapi>=0.162.0",
     "gtts>=2.5.4",
-    "mlx-whisper>=0.4.3",
+    "mlx-whisper>=0.4.3 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "faster-whisper>=1.1 ; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "rapidocr-onnxruntime>=1.4 ; sys_platform != 'darwin'",
+    "psutil>=6",
+    "yt-dlp>=2026.10.21",
+    "httpx",
+    "pywebview>=5",
+    "certifi",
     "numpy>=2.5.4",
     "openai>=3.37.0",
     "opencc-python-reimplemented>=0.1.7",
@@ -23,3 +30,8 @@ dependencies = [
 demucs = [
     "demucs>=4.0.1",
 ]
+
+[dependency-groups]
+build = ["pyinstaller>=6.10"]
+# lets the Windows code paths (faster-whisper, RapidOCR) be tested on a Mac
+crossplat = ["faster-whisper>=1.1", "rapidocr-onnxruntime>=1.4"]

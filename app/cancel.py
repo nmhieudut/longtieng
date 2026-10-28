@@ -6,6 +6,7 @@ progress callbacks), and every external process is started through `run`/`popen`
 """
 
 import subprocess
+import sys
 import threading
 
 
@@ -58,6 +59,9 @@ def cancel(pid: str) -> None:
 def popen(cmd: list[str], pid: str | None = None, **kw) -> subprocess.Popen:
     pid = pid or current()
     check(pid)
+    if sys.platform == "win32":
+        # the desktop app has no console: without this every ffmpeg call flashes a black window
+        kw["creationflags"] = kw.get("creationflags", 0) | subprocess.CREATE_NO_WINDOW
     p = subprocess.Popen(cmd, **kw)
     if pid:
         with _guard:
@@ -88,3 +92,11 @@ def run(cmd: list[str], timeout: float | None = None, text: bool = True, pid: st
     if requested(pid):
         raise Cancelled()
     return subprocess.CompletedProcess(cmd, p.returncode, out, err)
+
+
+def cancel_all() -> None:
+    """App is closing: stop every job and kill every tool still running."""
+    with _guard:
+        pids = set(_flags) | set(_procs)
+    for pid in pids:
+        cancel(pid)

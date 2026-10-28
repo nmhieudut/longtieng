@@ -89,8 +89,9 @@ def _prepare(pid: str):
     extract_audio_16k(src, d / "audio16k.wav")
 
     if not stt.model_cached():
-        step(pid, "model", None, "Lần đầu chạy: đang tải model Whisper (~1.6GB), chờ vài phút…")
-        stt.ensure_model()
+        msg = "Lần đầu chạy: đang tải model nhận dạng giọng (~1.6GB), chỉ tải một lần…"
+        step(pid, "model", None, msg)
+        stt.ensure_model(lambda f: step(pid, "model", f, msg))
 
     step(pid, "transcribing", 0, "Đang nhận dạng giọng nói…")
     last = [0.0]

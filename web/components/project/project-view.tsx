@@ -225,6 +225,7 @@ export function ProjectView({ id }: { id: string }) {
               <SettingsPanel
                 settings={p.settings}
                 voices={cfg?.voices ?? {}}
+                canDemucs={cfg?.features.demucs ?? false}
                 disabled={busy}
                 onDraft={setDraft}
                 onSave={async (patch) => { await onSettings(patch); setDraft(null); }}

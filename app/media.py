@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from . import cancel
-from .config import FFMPEG, FFPROBE, SAMPLE_RATE, YTDLP, YTDLP_COOKIES_BROWSER, YTDLP_COOKIES_FILE
+from .config import FFMPEG, FFPROBE, SAMPLE_RATE, YTDLP_CMD, YTDLP_COOKIES_BROWSER, YTDLP_COOKIES_FILE
 
 
 class MediaError(Exception):
@@ -118,7 +118,7 @@ def normalize_url(url: str) -> str:
 def download_url(url: str, out_dir: Path, on_progress=None) -> Path:
     url = normalize_url(url)
     cmd = [
-        YTDLP, "--no-playlist", "--newline", "--no-warnings", "--socket-timeout", "30", "--retries", "3",
+        *YTDLP_CMD, "--no-playlist", "--newline", "--no-warnings", "--socket-timeout", "30", "--retries", "3",
         "--max-filesize", "500M",
         "-f", "bv*[vcodec^=avc1]+ba[ext=m4a]/bv*+ba/b",
         "--merge-output-format", "mp4",
@@ -129,9 +129,9 @@ def download_url(url: str, out_dir: Path, on_progress=None) -> Path:
     if YTDLP_COOKIES_FILE:
         if not Path(YTDLP_COOKIES_FILE).is_file():
             raise MediaError(f"Không thấy file cookie: {YTDLP_COOKIES_FILE} (YTDLP_COOKIES_FILE trong .env).")
-        cmd[1:1] = ["--cookies", YTDLP_COOKIES_FILE]
+        cmd[len(YTDLP_CMD):len(YTDLP_CMD)] = ["--cookies", YTDLP_COOKIES_FILE]
     elif YTDLP_COOKIES_BROWSER:
-        cmd[1:1] = ["--cookies-from-browser", YTDLP_COOKIES_BROWSER]
+        cmd[len(YTDLP_CMD):len(YTDLP_CMD)] = ["--cookies-from-browser", YTDLP_COOKIES_BROWSER]
     proc = cancel.popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     log = []
     try:

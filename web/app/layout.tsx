@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Be_Vietnam_Pro, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 
+import { DesktopBridge } from "@/components/desktop-bridge";
 import { SiteHeader } from "@/components/site-header";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -30,6 +31,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <SiteHeader />
             <main className="flex-1 w-full max-w-[1500px] mx-auto px-4 py-5 sm:px-6">{children}</main>
             <Toaster richColors position="top-center" />
+            <DesktopBridge />
           </TooltipProvider>
         </ThemeProvider>
       </body>

@@ -9,10 +9,11 @@ from pathlib import Path
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from . import dub, jobs, music, ocr, publish, store
+from . import dub, jobs, music, ocr, publish, store, stt
 from .media import MediaError
 from .config import (
-    DATA_DIR, DEFAULT_SETTINGS, MAX_DURATION_MIN, MAX_UPLOAD_MB, OPENAI_API_KEY, OPENAI_MODEL, VOICES, WEB_DIR,
+    DATA_DIR, DEFAULT_SETTINGS, FROZEN, MAX_DURATION_MIN, MAX_UPLOAD_MB, OPENAI_MODEL, USER_DIR, VOICES, WEB_DIR,
+    demucs_available, openai_key, save_user_settings,
 )
 
 ACTIVE = {"queued", "downloading", "extracting", "model", "transcribing", "detecting", "translating",
@@ -29,16 +30,15 @@ ENUMS = {
 def _kill_orphans():
     """ffmpeg/yt-dlp/demucs started by a previous server process keep running after it dies."""
     import os
-    import signal
-    import subprocess as sp
 
-    r = sp.run(["pgrep", "-f", str(DATA_DIR)], capture_output=True, text=True)
-    for line in r.stdout.split():
+    import psutil
+
+    me, mark = os.getpid(), str(DATA_DIR)
+    for proc in psutil.process_iter(["pid", "cmdline"]):
         try:
-            pid = int(line)
-            if pid != os.getpid():
-                os.kill(pid, signal.SIGKILL)
-        except (ValueError, ProcessLookupError, PermissionError):
+            if proc.info["pid"] != me and any(mark in a for a in proc.info["cmdline"] or ()):
+                proc.kill()
+        except (psutil.Error, OSError):
             pass
     for f in DATA_DIR.glob("*/out/*.part.*"):
         f.unlink(missing_ok=True)
@@ -133,8 +133,47 @@ def config():
         "defaults": DEFAULT_SETTINGS,
         "max_upload_mb": MAX_UPLOAD_MB,
         "max_duration_min": MAX_DURATION_MIN,
-        "translator": f"OpenAI ({OPENAI_MODEL})" if OPENAI_API_KEY else "Google Dịch (chưa có OPENAI_API_KEY)",
+        "translator": f"OpenAI ({OPENAI_MODEL})" if openai_key() else "Google Dịch (chưa nhập OpenAI API key)",
+        "features": {"demucs": demucs_available()},
+        "desktop": FROZEN,
     }
+
+
+def _mask_key(k: str) -> str:
+    return f"{k[:7]}…{k[-4:]}" if len(k) > 14 else ("đã nhập" if k else "")
+
+
+@app.get("/api/app-settings")
+def app_settings():
+    k = openai_key()
+    return {
+        "openai_key_set": bool(k),
+        "openai_key_hint": _mask_key(k),
+        "stt_engine": stt.engine_label(),
+        "stt_model_ready": stt.model_cached(),
+        "data_dir": str(USER_DIR),
+    }
+
+
+@app.put("/api/app-settings")
+def put_app_settings(body: dict = Body(...)):
+    if isinstance(body.get("openai_key"), str):
+        k = body["openai_key"].strip()
+        if k and not k.startswith("sk-"):
+            raise HTTPException(400, "Key OpenAI phải bắt đầu bằng “sk-”.")
+        if k:
+            try:
+                from openai import OpenAI
+                OpenAI(api_key=k, max_retries=0, timeout=20).models.list()
+            except Exception as e:
+                name = type(e).__name__
+                if "Authentication" in name:
+                    raise HTTPException(400, "Key không đúng hoặc đã bị thu hồi.")
+                if "Connection" in name or "Timeout" in name:
+                    raise HTTPException(502, "Không kết nối được OpenAI để kiểm tra key. Kiểm tra mạng rồi thử lại.")
+                raise HTTPException(400, f"OpenAI từ chối key ({name}).")
+        save_user_settings({"openai_key": k})
+    return app_settings()
 
 
 # ---------- shared background-music library
@@ -408,11 +447,8 @@ def start_render(pid: str, preview_start: float | None = Body(None, embed=True))
     _not_busy(pid)
     if not p["segments"] or not p.get("media"):
         raise HTTPException(400, "Chưa có bản dịch để lồng tiếng.")
-    if p["settings"]["audio_mode"] == "demucs":
-        try:
-            import demucs  # noqa: F401
-        except ImportError:
-            raise HTTPException(400, "Chưa cài demucs. Chạy: uv sync --extra demucs  (hoặc chọn 'Giảm âm gốc').")
+    if p["settings"]["audio_mode"] == "demucs" and not demucs_available():
+        raise HTTPException(400, "Bản này không có tách nhạc nền (demucs). Chọn 'Giảm âm gốc' trong Cài đặt âm thanh.")
     if preview_start is not None:
         dur = p["media"]["duration"]
         preview_start = min(max(0.0, float(preview_start)), max(0.0, dur - 1.0))

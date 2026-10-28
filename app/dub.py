@@ -2,7 +2,6 @@
 
 import asyncio
 import hashlib
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -13,8 +12,9 @@ import soundfile as sf
 
 from .config import (
     DATA_DIR, FFMPEG, MAX_ATEMPO, MAX_EDGE_SPEEDUP,
-    OPENAI_API_KEY, OPENAI_TTS_MODEL, SAMPLE_RATE, VI_CHARS_PER_SEC,
+    OPENAI_TTS_MODEL, SAMPLE_RATE, VI_CHARS_PER_SEC, openai_key,
 )
+from . import cancel
 from .media import decode_mono, trim_silence
 
 _edge_sem = threading.Semaphore(4)  # edge-tts is an unofficial endpoint; be gentle
@@ -54,14 +54,19 @@ def _rate_str(r: float) -> str:
 _OPENAI_TTS_INSTRUCTIONS = ("Đọc bằng tiếng Việt chuẩn như người Việt bản xứ, tự nhiên, rõ ràng, "
                             "giọng lồng tiếng video ngắn, không đọc quá chậm.")
 _openai_client = None
+_openai_client_key = ""
 
 
 def _synth_openai(text: str, name: str, rate: float, out: Path) -> None:
-    global _openai_client
+    global _openai_client, _openai_client_key
     from openai import OpenAI
 
-    if _openai_client is None:
-        _openai_client = OpenAI(api_key=OPENAI_API_KEY, max_retries=2, timeout=60)
+    key = openai_key()
+    if not key:
+        raise RuntimeError("Giọng OpenAI cần OpenAI API key. Nhập key trong Cài đặt (biểu tượng bánh răng), "
+                           "hoặc chọn giọng miễn phí như Chị Google.")
+    if _openai_client is None or key != _openai_client_key:
+        _openai_client, _openai_client_key = OpenAI(api_key=key, max_retries=2, timeout=60), key
     r = _openai_client.audio.speech.create(
         model=OPENAI_TTS_MODEL, voice=name, input=text, instructions=_OPENAI_TTS_INSTRUCTIONS,
         response_format="mp3", speed=min(4.0, max(0.25, rate)))
@@ -93,8 +98,8 @@ def _tempo(src: Path, rate: float, out: Path) -> None:
         filters.append("atempo=2.0")
         r /= 2.0
     filters.append(f"atempo={r:.4f}")
-    res = subprocess.run([FFMPEG, "-y", "-v", "error", "-i", str(src), "-filter:a", ",".join(filters), str(out)],
-                         capture_output=True, text=True, timeout=60)
+    res = cancel.run([FFMPEG, "-y", "-v", "error", "-i", str(src), "-filter:a", ",".join(filters), str(out)],
+                     timeout=60)
     if res.returncode != 0:
         raise RuntimeError("ffmpeg atempo lỗi: " + res.stderr[-300:])
 
