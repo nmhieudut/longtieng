@@ -85,11 +85,15 @@ jobs:
           merge-multiple: true
       - name: latest.json
         run: |
+          # keep only the release files, flat (artifacts can carry extra folders)
+          mkdir release
+          find assets -type f \( -name '*.zip' -o -name '*.dmg' \) -exec mv {} release/ \;
+          ls -la release
           git fetch --force --tags
           git tag -l --format='%(contents)' "$GITHUB_REF_NAME" | sed '/-----BEGIN/,$d' > notes.txt
-          python3 packaging/latest_json.py "$GITHUB_REF_NAME" assets notes.txt > assets/latest.json
-          cat assets/latest.json
+          python3 packaging/latest_json.py "$GITHUB_REF_NAME" release notes.txt > release/latest.json
+          cat release/latest.json
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" assets/* --title "Lồng tiếng $GITHUB_REF_NAME" --notes-file notes.txt --latest
+        run: gh release create "$GITHUB_REF_NAME" release/* --title "Lồng tiếng $GITHUB_REF_NAME" --notes-file notes.txt --latest
