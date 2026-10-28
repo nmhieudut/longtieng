@@ -16,17 +16,22 @@ from pathlib import Path
 
 def _step(name, fn):
     t = time.time()
+    print(f"[ .. ] {name}", flush=True)
     try:
         out = fn()
         print(f"[ OK ] {name} ({time.time() - t:.1f}s){'  ' + str(out) if out else ''}", flush=True)
         return out
-    except Exception:
-        print(f"[FAIL] {name}", flush=True)
-        traceback.print_exc()
-        raise
+    except BaseException as e:  # SystemExit from a library too: say where it happened
+        print(f"[FAIL] {name}: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc(file=sys.stdout)
+        sys.stdout.flush()
+        raise RuntimeError(name) from e
 
 
 def run() -> int:
+    import faulthandler
+
+    faulthandler.enable(file=sys.stdout)  # native crashes (DLL problems) still leave a trace
     home = Path(tempfile.mkdtemp(prefix="longtieng-selftest-"))
     os.environ.setdefault("LONGTIENG_HOME", str(home))
     os.environ.setdefault("FASTER_WHISPER_MODEL", "tiny")
@@ -60,8 +65,15 @@ def _check_ffmpeg(config):
 
 
 def _check_ocr(ocr):
+    if ocr._engine() == "rapid":
+        import rapidocr_onnxruntime  # noqa: F401  (raise the real import error, not just False)
     if not ocr.available():
         raise RuntimeError("OCR không import được")
+    import numpy as np
+
+    if ocr._engine() == "rapid":  # load the models once: catches missing model/config files
+        from rapidocr_onnxruntime import RapidOCR
+        RapidOCR()(np.zeros((64, 64, 3), np.uint8))
 
 
 def _check_ytdlp(config):
