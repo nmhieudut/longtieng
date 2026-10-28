@@ -15,6 +15,7 @@ import opencc
 import soundfile as sf
 
 from . import cancel
+from .config import lang_info
 
 _t2s = opencc.OpenCC("t2s")
 _PUNCT_ONLY = re.compile(r"^[\s\W_]*$", re.UNICODE)
@@ -97,7 +98,7 @@ def transcribe(audio: Path, lang: str, on_progress=None) -> tuple[list[dict], st
     samples, sr = sf.read(str(audio), dtype="float32")
     assert sr == 16000, sr
     language = None if lang == "auto" else lang
-    prompt = "以下是普通话的句子。" if lang == "zh" else None
+    prompt = lang_info(lang).get("prompt") if lang != "auto" else None
     if engine() == "mlx":
         raw, detected = _mlx(samples, language, prompt, on_progress)
     else:

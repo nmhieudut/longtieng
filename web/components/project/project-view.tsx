@@ -233,7 +233,7 @@ export function ProjectView({ id }: { id: string }) {
                 onDetect={async () => {
                   await run(async () => {
                     const np = await api.detectMask(id);
-                    toast.success(np.mask_detect?.found ? "Đã tìm thấy và che vùng phụ đề Trung." : "Không thấy phụ đề Trung trên video.");
+                    toast.success(np.mask_detect?.found ? "Đã tìm thấy và che vùng phụ đề gốc." : "Không thấy phụ đề gốc trên video.");
                     return np;
                   });
                   setDraft(null);

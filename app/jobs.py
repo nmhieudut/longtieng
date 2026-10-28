@@ -107,8 +107,8 @@ def _prepare(pid: str):
         raise MediaError("Không nhận dạng được câu thoại nào trong video.")
 
     if p["settings"]["mask"].get("auto", True) and ocr.available():
-        step(pid, "detecting", None, "Đang dò phụ đề Trung có sẵn trên video…")
-        apply_mask_detection(pid, ocr.detect(src, segs, media["duration"]))
+        step(pid, "detecting", None, "Đang dò phụ đề gốc có sẵn trên video…")
+        apply_mask_detection(pid, ocr.detect(src, segs, media["duration"], lang))
 
     step(pid, "translating", 0, f"Đang dịch {len(segs)} câu…")
     warnings = translate.translate_all(

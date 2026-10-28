@@ -51,7 +51,7 @@ function NewProject() {
 
   async function start() {
     if (!cfg) return;
-    const settings = { lang: lang as "zh" | "auto", voice };
+    const settings = { lang, voice };
     setSending(true);
     try {
       let p;
@@ -76,7 +76,7 @@ function NewProject() {
     <Card>
       <CardHeader>
         <CardTitle className="text-lg">Video mới</CardTitle>
-        <CardDescription>Nhận dạng tiếng Trung, dịch sang tiếng Việt và lồng tiếng tự động.</CardDescription>
+        <CardDescription>Nhận dạng giọng nói (Trung, Anh, Nhật, Hàn, Thái), dịch sang tiếng Việt và lồng tiếng tự động.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
         <Tabs value={tab} onValueChange={setTab}>
@@ -139,8 +139,9 @@ function NewProject() {
           <Select value={lang} onValueChange={setLang}>
             <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="zh">Tiếng Trung</SelectItem>
-              <SelectItem value="auto">Tự nhận diện</SelectItem>
+              {Object.entries(cfg?.langs ?? { zh: "Tiếng Trung" }).map(([k, label]) => (
+                <SelectItem key={k} value={k}>{label}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>

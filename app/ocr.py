@@ -15,7 +15,23 @@ from pathlib import Path
 from . import cancel
 from .config import FFMPEG
 
-_CJK = re.compile("[\u4e00-\u9fff]")
+# Per source language: Vision recognition languages, the script its subtitles are written in,
+# and how many such characters a line needs to count as a subtitle.
+_SCRIPTS = {
+    "zh": (["zh-Hans", "zh-Hant"], re.compile("[\u4e00-\u9fff]"), 2),
+    "ja": (["ja-JP"], re.compile("[\u3040-\u30ff\u4e00-\u9fff]"), 2),
+    "ko": (["ko-KR"], re.compile("[\uac00-\ud7af]"), 2),
+    "th": (["th-TH"], re.compile("[\u0e00-\u0e7f]"), 3),
+    "en": (["en-US"], re.compile("[A-Za-z]"), 4),
+}
+_RAPID_LANGS = {"zh", "en"}  # RapidOCR's bundled model reads Chinese + Latin only
+
+
+def supports(lang: str | None) -> bool:
+    lang = lang if lang in _SCRIPTS else ("zh" if lang in (None, "auto") else lang)
+    if lang not in _SCRIPTS:
+        return False
+    return _engine() == "vision" or lang in _RAPID_LANGS
 MAX_FRAMES = 14
 
 
@@ -37,19 +53,19 @@ def available() -> bool:
         return False
 
 
-def _read_text(png: Path) -> list[dict]:
+def _read_text(png: Path, langs: list[str]) -> list[dict]:
     """Text lines on one image. y/h are fractions of the height, measured from the BOTTOM."""
-    return _read_vision(png) if _engine() == "vision" else _read_rapid(png)
+    return _read_vision(png, langs) if _engine() == "vision" else _read_rapid(png)
 
 
-def _read_vision(png: Path) -> list[dict]:
+def _read_vision(png: Path, langs: list[str]) -> list[dict]:
     import Vision
     from Foundation import NSURL
 
     handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(NSURL.fileURLWithPath_(str(png)), None)
     req = Vision.VNRecognizeTextRequest.alloc().init()
     req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
-    req.setRecognitionLanguages_(["zh-Hans", "zh-Hant"])
+    req.setRecognitionLanguages_(langs)
     req.setUsesLanguageCorrection_(False)
     ok, _err = handler.performRequests_error_([req], None)
     if not ok:
@@ -103,10 +119,13 @@ def _times(segments: list[dict], duration: float) -> list[float]:
     return mids
 
 
-def detect(src: Path, segments: list[dict], duration: float) -> dict | None:
+def detect(src: Path, segments: list[dict], duration: float, lang: str | None = "zh") -> dict | None:
     """Return {"bottom": %, "height": %} (from the bottom edge) or None if no subtitle band found."""
-    if not available():
+    if not available() or not supports(lang):
         return None
+    if lang not in _SCRIPTS:
+        lang = "zh"
+    vision_langs, script, min_chars = _SCRIPTS[lang]
     times = _times(segments, duration)
     hits = []  # (frame_index, line)
     with tempfile.TemporaryDirectory() as tmp:
@@ -117,8 +136,8 @@ def detect(src: Path, segments: list[dict], duration: float) -> dict | None:
                             "-vf", "scale=720:-2", str(png)], timeout=60)
             if r.returncode != 0 or not png.exists():
                 continue
-            for line in _read_text(png):
-                if len(_CJK.findall(line["text"])) >= 2 and line["w"] > 0.08:
+            for line in _read_text(png, vision_langs):
+                if len(script.findall(line["text"])) >= min_chars and line["w"] > 0.08:
                     hits.append((i, line))
     if not hits:
         return None

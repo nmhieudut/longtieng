@@ -80,8 +80,8 @@ export function SettingsPanel({ settings, voices, canDemucs, disabled, onDraft, 
           <ToggleGroupItem value="mute" className="flex-1">Tắt</ToggleGroupItem>
         </ToggleGroup>
         <p className="text-xs text-muted-foreground">
-          {s.audio_mode === "duck" && "Giữ âm gốc (cả giọng Trung) ở mức nhỏ, trộn với giọng Việt."}
-          {s.audio_mode === "demucs" && "Tách bỏ giọng Trung, chỉ giữ nhạc nền và tiếng động. Chậm hơn vài phút."}
+          {s.audio_mode === "duck" && "Giữ âm gốc (cả giọng nói gốc) ở mức nhỏ, trộn với giọng Việt."}
+          {s.audio_mode === "demucs" && "Tách bỏ giọng nói gốc, chỉ giữ nhạc nền và tiếng động. Chậm hơn vài phút."}
           {s.audio_mode === "mute" && "Chỉ còn giọng lồng tiếng."}
         </p>
         {s.audio_mode !== "mute" && (
@@ -115,7 +115,7 @@ export function SettingsPanel({ settings, voices, canDemucs, disabled, onDraft, 
       <Section
         value="mask"
         icon={<EyeOff />}
-        title="Che phụ đề Trung"
+        title="Che phụ đề gốc"
         summary={!s.mask.enabled ? "Tắt" : s.mask.auto ? "Tự động · đang che" : "Chỉnh tay · đang che"}
         action={<Switch checked={s.mask.enabled} disabled={disabled} onCheckedChange={(v) => change({ mask: { enabled: v } })} />}
       >
@@ -123,9 +123,9 @@ export function SettingsPanel({ settings, voices, canDemucs, disabled, onDraft, 
           {s.mask.auto ? (
             maskDetect?.found ? (
               <span className="flex items-center gap-1.5 text-ok"><CheckCircle2 className="size-3.5" />
-                Tự nhận diện: có phụ đề Trung, cách đáy {maskDetect.bottom}%, cao {maskDetect.height}%</span>
+                Tự nhận diện: có phụ đề gốc, cách đáy {maskDetect.bottom}%, cao {maskDetect.height}%</span>
             ) : maskDetect ? (
-              <span className="text-muted-foreground">Tự nhận diện: không thấy phụ đề Trung trên video.</span>
+              <span className="text-muted-foreground">Tự nhận diện: không thấy phụ đề gốc trên video.</span>
             ) : (
               <span className="text-muted-foreground">Sẽ tự nhận diện khi xử lý video.</span>
             )

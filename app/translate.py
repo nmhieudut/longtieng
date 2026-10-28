@@ -2,17 +2,17 @@
 
 import json
 
-from .config import OPENAI_MODEL, VI_CHARS_PER_SEC, openai_key
+from .config import OPENAI_MODEL, VI_CHARS_PER_SEC, lang_info, openai_key
 
 BATCH = 40
 CONTEXT = 6
 
-SYSTEM = """Bạn là biên dịch viên lồng tiếng video ngắn (Douyin/TikTok) sang tiếng Việt.
+SYSTEM = """Bạn là biên dịch viên lồng tiếng video ngắn (Douyin/TikTok/Reels) từ {src} sang tiếng Việt.
 Yêu cầu:
 - Dịch tự nhiên như người Việt nói, đúng văn nói, giữ giọng điệu gốc.
 - Bản dịch sẽ được đọc lồng tiếng nên PHẢI NGẮN GỌN: không vượt quá max_chars ký tự của mỗi câu. Lược bớt từ thừa nếu cần, giữ ý chính.
 - Đọc cả các câu xung quanh để hiểu ngữ cảnh, nhưng mỗi id dịch riêng, không gộp, không tách.
-- Tên riêng tiếng Trung: dùng Hán Việt nếu phổ biến, nếu không giữ phiên âm.
+- {names}
 - Không thêm chú thích, không thêm dấu ngoặc giải thích.
 Trả về JSON: {"items":[{"id":<số>,"vi":"<bản dịch>"}]} với đúng mọi id được gửi."""
 
@@ -32,7 +32,7 @@ def translate_all(segs: list[dict], duration: float, src_lang: str, rate: float,
     todo = list(range(len(segs)))
     if openai_key():
         try:
-            _openai(segs, duration, rate, on_progress)
+            _openai(segs, duration, rate, src_lang, on_progress)
         except Exception as e:  # auth / quota / network — fall back to Google
             warnings.append(f"OpenAI lỗi ({type(e).__name__}: {str(e)[:160]}). Đã chuyển sang Google Dịch.")
         todo = [i for i, s in enumerate(segs) if not s["vi"].strip()]
@@ -48,10 +48,12 @@ def translate_all(segs: list[dict], duration: float, src_lang: str, rate: float,
     return warnings
 
 
-def _openai(segs, duration, rate, on_progress):
+def _openai(segs, duration, rate, src_lang, on_progress):
     from openai import OpenAI
 
     client = OpenAI(api_key=openai_key(), max_retries=2, timeout=90)
+    info = lang_info(src_lang)
+    system = SYSTEM.replace("{src}", info["name"]).replace("{names}", info["names"])
     done_ctx: list[str] = []
     for b in range(0, len(segs), BATCH):
         chunk = range(b, min(b + BATCH, len(segs)))
@@ -67,7 +69,7 @@ def _openai(segs, duration, rate, on_progress):
             r = client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[
-                    {"role": "system", "content": SYSTEM},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
                 ],
                 response_format={"type": "json_object"},
@@ -106,7 +108,7 @@ def _gtx(text: str, src: str) -> str:
 def _google(segs, idxs, src_lang, on_progress=None):
     import time
 
-    src = "zh-CN" if src_lang.startswith("zh") else "auto"
+    src = lang_info(src_lang)["google"]
     for n, i in enumerate(idxs):
         for attempt in range(3):
             try:

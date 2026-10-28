@@ -12,7 +12,7 @@ export type Segment = {
 };
 
 export type Settings = {
-  lang: "zh" | "auto";
+  lang: string; // key of Config.langs
   voice: string;
   rate: number;
   audio_mode: "duck" | "demucs" | "mute";
@@ -74,6 +74,7 @@ export type Config = {
   max_duration_min: number;
   translator: string;
   features: { demucs: boolean };
+  langs: Record<string, string>;
   desktop: boolean;
 };
 

@@ -208,8 +208,35 @@ MAX_ATEMPO = 1.15
 
 SAMPLE_RATE = 48000
 
+# Spoken language of the source video. Everything is dubbed into Vietnamese.
+SOURCE_LANGS: dict[str, dict] = {
+    "zh": {"label": "Tiếng Trung", "name": "tiếng Trung", "google": "zh-CN", "prompt": "以下是普通话的句子。",
+           "names": "Tên riêng tiếng Trung: dùng Hán Việt nếu phổ biến, nếu không giữ phiên âm."},
+    "en": {"label": "Tiếng Anh", "name": "tiếng Anh", "google": "en",
+           "names": "Tên riêng, thương hiệu: giữ nguyên tiếng Anh."},
+    "ja": {"label": "Tiếng Nhật", "name": "tiếng Nhật", "google": "ja",
+           "names": "Tên riêng tiếng Nhật: viết phiên âm Latin (romaji), ví dụ Tanaka, Sakura."},
+    "ko": {"label": "Tiếng Hàn", "name": "tiếng Hàn", "google": "ko",
+           "names": "Tên riêng tiếng Hàn: viết phiên âm Latin, ví dụ Kim Ji-woo, Seoul."},
+    "th": {"label": "Tiếng Thái", "name": "tiếng Thái", "google": "th",
+           "names": "Tên riêng tiếng Thái: viết phiên âm Latin."},
+    "auto": {"label": "Tự nhận diện", "name": "tiếng gốc", "google": "auto",
+             "names": "Tên riêng: giữ phiên âm hoặc dạng quen dùng ở Việt Nam."},
+}
+
+
+def lang_info(code: str | None) -> dict:
+    """Info for a language code (also Whisper's detected codes like 'es' that aren't in the list)."""
+    if code in SOURCE_LANGS:
+        return SOURCE_LANGS[code]
+    base = dict(SOURCE_LANGS["auto"])
+    if code and code.isalpha() and len(code) == 2:
+        base["google"] = code
+    return base
+
+
 DEFAULT_SETTINGS = {
-    "lang": "zh",              # "zh" | "auto"
+    "lang": "zh",              # key of SOURCE_LANGS
     "voice": "google:vi",
     "rate": 1.0,               # 0.8 – 1.3
     "audio_mode": "duck",      # "duck" | "demucs" | "mute"

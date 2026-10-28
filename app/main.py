@@ -13,14 +13,14 @@ from . import dub, jobs, music, ocr, publish, store, stt, update
 from .media import MediaError
 from .config import (
     APP_VERSION, DATA_DIR, DEFAULT_SETTINGS, FROZEN, MAX_DURATION_MIN, MAX_UPLOAD_MB, OPENAI_MODEL, USER_DIR, VOICES, WEB_DIR,
-    demucs_available, openai_key, save_user_settings,
+    SOURCE_LANGS, demucs_available, openai_key, save_user_settings,
 )
 
 ACTIVE = {"queued", "downloading", "extracting", "model", "transcribing", "detecting", "translating",
           "dubbing", "separating", "rendering"}
 VIDEO_EXT = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
 ENUMS = {
-    "lang": {"zh", "auto"},
+    "lang": set(SOURCE_LANGS),
     "voice": set(VOICES),
     "audio_mode": {"duck", "demucs", "mute"},
     "subtitle_mode": {"burn", "srt", "none"},
@@ -136,6 +136,7 @@ def config():
         "max_duration_min": MAX_DURATION_MIN,
         "translator": f"OpenAI ({OPENAI_MODEL})" if openai_key() else "Google Dịch (chưa nhập OpenAI API key)",
         "features": {"demucs": demucs_available()},
+        "langs": {k: v["label"] for k, v in SOURCE_LANGS.items()},
         "desktop": FROZEN,
     }
 
@@ -364,7 +365,8 @@ def detect_mask(pid: str):
         raise HTTPException(400, "Video chưa sẵn sàng.")
     if not ocr.available():
         raise HTTPException(400, "Máy này không có Apple Vision để nhận dạng chữ.")
-    found = ocr.detect(store.pdir(pid) / p["source"]["file"], p["segments"], p["media"]["duration"])
+    found = ocr.detect(store.pdir(pid) / p["source"]["file"], p["segments"], p["media"]["duration"],
+                       p.get("detected_lang") or p["settings"]["lang"])
     jobs.apply_mask_detection(pid, found)
     return _view(store.update(pid, lambda q: q.__setitem__("edited_at", time.time())))
 
