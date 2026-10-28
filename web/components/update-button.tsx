@@ -1,12 +1,13 @@
 "use client";
 
-import { ArrowDownCircle, Loader2, RotateCw } from "lucide-react";
+import { ArrowDownCircle, Loader2, RefreshCw, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, type UpdateState } from "@/lib/api";
 
 const mb = (n?: number) => (n ? `${Math.max(1, Math.round(n / 1048576))}MB` : "");
@@ -15,13 +16,37 @@ const mb = (n?: number) => (n ? `${Math.max(1, Math.round(n / 1048576))}MB` : ""
 export function UpdateButton() {
   const [u, setU] = useState<UpdateState | null>(null);
   const [open, setOpen] = useState(false);
+  const [checking, setChecking] = useState(false);
 
   const refresh = useCallback(() => api.updateState().then(setU).catch(() => {}), []);
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, 30 * 60 * 1000);
-    return () => clearInterval(t);
+    // pick up a check made elsewhere (Settings dialog), and look again whenever the window comes back
+    const onFocus = () => refresh();
+    window.addEventListener("update-changed", refresh);
+    window.addEventListener("focus", onFocus);
+    const t = setInterval(refresh, 10 * 60 * 1000);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener("update-changed", refresh);
+      window.removeEventListener("focus", onFocus);
+    };
   }, [refresh]);
+
+  async function checkNow() {
+    setChecking(true);
+    try {
+      const next = await api.updateState(true);
+      setU(next);
+      if (next.stage === "available") setOpen(true);
+      else if (next.stage === "error") toast.error(next.error ?? "Không kiểm tra được.");
+      else toast.success(`Bạn đang dùng bản mới nhất (${next.current}).`);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setChecking(false);
+    }
+  }
 
   const working = u && ["downloading", "installing", "restarting"].includes(u.stage);
   useEffect(() => {
@@ -30,10 +55,19 @@ export function UpdateButton() {
     return () => clearInterval(t);
   }, [working, refresh]);
 
-  if (!u?.enabled || !u.latest || !["available", "downloading", "installing", "restarting", "error"].includes(u.stage)) {
-    return null;
+  if (!u?.enabled) return null;
+  if (!u.latest || !["available", "downloading", "installing", "restarting", "error"].includes(u.stage)) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="ghost" size="icon" aria-label="Kiểm tra bản mới" disabled={checking} onClick={checkNow}>
+            <RefreshCw className={checking ? "size-4 animate-spin" : "size-4"} />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Kiểm tra bản mới · đang dùng {u.current}</TooltipContent>
+      </Tooltip>
+    );
   }
-  if (u.stage === "error" && !u.latest) return null;
 
   const size = u.kind === "patch" ? mb(u.latest.patch?.size) : mb(u.latest.mac?.size ?? u.latest.windows?.size);
 

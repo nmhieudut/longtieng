@@ -22,6 +22,7 @@ export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
     setChecking(true);
     try {
       const u = await api.updateState(true);
+      window.dispatchEvent(new Event("update-changed"));  // the header button shows it right away
       if (!u.enabled) toast.info("Bản chạy từ mã nguồn không tự cập nhật. Dùng git pull.");
       else if (u.stage === "available") toast.success(`Có bản mới ${u.latest?.version}. Bấm nút “Có bản mới” trên thanh trên cùng.`);
       else if (u.stage === "error") toast.error(u.error ?? "Không kiểm tra được.");
