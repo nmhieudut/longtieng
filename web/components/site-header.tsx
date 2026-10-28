@@ -16,18 +16,18 @@ export function SiteHeader() {
   const loadConfig = () => { api.config().then((c) => setTranslator(c.translator)).catch(() => {}); };
   useEffect(loadConfig, []);
   return (
-    <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur">
-      <div className="mx-auto flex h-14 max-w-[1500px] items-center gap-3 px-4 sm:px-6">
-        <Link href="/" className="flex items-center gap-2 font-semibold">
-          <span className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground">
-            <AudioLines className="size-4" />
+    <header className="sticky top-0 z-30 border-b bg-background/80 backdrop-blur-md">
+      <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-3 px-4 sm:px-6">
+        <Link href="/" className="flex shrink-0 items-center gap-2.5">
+          <span className="grid size-8 place-items-center rounded-[10px] bg-brand">
+            <AudioLines className="size-4" strokeWidth={2.4} />
           </span>
-          <span>Lồng tiếng</span>
+          <span className="font-heading text-[1.15rem] font-bold tracking-[-0.02em]">Lồng tiếng</span>
         </Link>
-        <span className="ml-auto hidden truncate text-xs text-muted-foreground sm:block">
+        <span className="ml-auto hidden min-w-0 truncate text-xs text-muted-foreground md:block">
           {translator && `Dịch bằng: ${translator}`}
         </span>
-        <div className="ml-auto flex items-center gap-1 sm:ml-0">
+        <div className="ml-auto flex shrink-0 items-center gap-1 md:ml-0">
         <UpdateButton />
         <AppSettingsButton onChanged={loadConfig} />
         <Button

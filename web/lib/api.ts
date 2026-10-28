@@ -195,6 +195,7 @@ export const desktopApi = (): DesktopApi | undefined =>
   typeof window === "undefined" ? undefined : (window as unknown as { pywebview?: { api?: DesktopApi } }).pywebview?.api;
 
 export const logoUrl = (lid: string) => `/api/logos/${lid}/file`;
+export const posterUrl = (id: string) => `/api/projects/${id}/poster`;
 export const stillUrl = (id: string, t: number) => `${P(id)}/still?t=${t.toFixed(2)}&n=${Date.now()}`;
 
 export const voiceSampleUrl = (voice: string) => `/api/voices/${encodeURIComponent(voice)}/sample`;

@@ -145,7 +145,7 @@ export function ExportPanel({ project: p, previewAt, onPreview, onRender, onRetr
         {final ? (
           <div className="grid gap-2">
             <div className="flex gap-2">
-              <Button asChild size="lg" variant={stale ? "outline" : "default"} className="h-10 flex-1">
+              <Button asChild size="lg" variant={stale ? "outline" : "brand"} className="h-10 flex-1">
                 <a href={dl("final")}><Download /> Tải video MP4</a>
               </Button>
               <DropdownMenu>
@@ -160,7 +160,7 @@ export function ExportPanel({ project: p, previewAt, onPreview, onRender, onRetr
               </DropdownMenu>
             </div>
             <div className="flex gap-2">
-              <Button variant={stale ? "default" : "outline"} className="flex-1" onClick={onRender}>
+              <Button variant={stale ? "brand" : "outline"} className="flex-1" onClick={onRender}>
                 <RotateCcw /> Xuất lại
               </Button>
               <Button variant="ghost" className="flex-1" onClick={onPreview}>
@@ -170,7 +170,7 @@ export function ExportPanel({ project: p, previewAt, onPreview, onRender, onRetr
           </div>
         ) : (
           <div className="grid gap-2">
-            <Button size="lg" className="h-11 text-base" onClick={onRender}>
+            <Button variant="brand" size="lg" className="h-11 rounded-xl text-base" onClick={onRender}>
               <Clapperboard /> Lồng tiếng & xuất video
             </Button>
             <Button variant="ghost" onClick={onPreview}>

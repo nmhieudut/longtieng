@@ -9,7 +9,10 @@
   --color-foreground: var(--foreground);
   --font-sans: "Be Vietnam Pro", "Be Vietnam Pro Fallback", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono", "Geist Mono Fallback", ui-monospace, monospace;
-  --font-heading: "Be Vietnam Pro", "Be Vietnam Pro Fallback", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-bricolage), "Be Vietnam Pro", ui-sans-serif, system-ui, sans-serif;
+  --color-brand-from: var(--brand-from);
+  --color-brand-to: var(--brand-to);
+  --color-brand-ink: var(--brand-ink);
   --color-ok: var(--ok);
   --color-fast: var(--fast);
   --color-fast-foreground: var(--fast-foreground);
@@ -53,34 +56,38 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --background: oklch(0.985 0.006 300);
+  --foreground: oklch(0.24 0.04 300);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.24 0.04 300);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.45 0.09 165);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.6 0.1 165);
-  --ok: oklch(0.62 0.12 160);
-  --fast: oklch(0.78 0.15 75);
-  --fast-foreground: oklch(0.45 0.1 65);
-  --over: oklch(0.6 0.22 27);
+  --popover-foreground: oklch(0.24 0.04 300);
+  --primary: oklch(0.52 0.17 292);
+  --primary-foreground: oklch(0.99 0.005 300);
+  --secondary: oklch(0.955 0.02 300);
+  --secondary-foreground: oklch(0.3 0.06 295);
+  --muted: oklch(0.962 0.012 300);
+  --muted-foreground: oklch(0.52 0.03 300);
+  --accent: oklch(0.95 0.025 300);
+  --accent-foreground: oklch(0.3 0.06 295);
+  --destructive: oklch(0.58 0.21 22);
+  --border: oklch(0.915 0.018 300);
+  --input: oklch(0.9 0.02 300);
+  --ring: oklch(0.68 0.14 292);
+  --ok: oklch(0.6 0.13 165);
+  --fast: oklch(0.78 0.14 60);
+  --fast-foreground: oklch(0.5 0.12 50);
+  --over: oklch(0.6 0.21 22);
+  /* brand gradient: lilac to peach; dark ink on top stays readable at both ends */
+  --brand-from: oklch(0.83 0.09 295);
+  --brand-to: oklch(0.88 0.08 50);
+  --brand-ink: oklch(0.24 0.06 300);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
+  --radius: 0.75rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -92,28 +99,31 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.74 0.13 165);
-  --primary-foreground: oklch(0.2 0.03 165);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.6 0.1 165);
-  --ok: oklch(0.7 0.13 160);
-  --fast: oklch(0.8 0.15 80);
-  --fast-foreground: oklch(0.85 0.13 80);
-  --over: oklch(0.68 0.2 25);
+  --background: oklch(0.17 0.02 300);
+  --foreground: oklch(0.96 0.01 300);
+  --card: oklch(0.21 0.025 300);
+  --card-foreground: oklch(0.96 0.01 300);
+  --popover: oklch(0.23 0.028 300);
+  --popover-foreground: oklch(0.96 0.01 300);
+  --primary: oklch(0.78 0.12 292);
+  --primary-foreground: oklch(0.2 0.04 300);
+  --secondary: oklch(0.27 0.03 300);
+  --secondary-foreground: oklch(0.96 0.01 300);
+  --muted: oklch(0.26 0.025 300);
+  --muted-foreground: oklch(0.72 0.03 300);
+  --accent: oklch(0.28 0.035 300);
+  --accent-foreground: oklch(0.96 0.01 300);
+  --destructive: oklch(0.7 0.18 22);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.7 0.12 292);
+  --ok: oklch(0.74 0.13 165);
+  --fast: oklch(0.82 0.13 65);
+  --fast-foreground: oklch(0.86 0.11 65);
+  --over: oklch(0.7 0.18 25);
+  --brand-from: oklch(0.78 0.11 295);
+  --brand-to: oklch(0.84 0.1 50);
+  --brand-ink: oklch(0.2 0.05 300);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -143,4 +153,16 @@
 @keyframes indet {
   from { left: -33%; }
   to { left: 100%; }
+}
+
+/* the one place the brand colours appear as a surface: main buttons, logo mark, progress */
+@utility bg-brand {
+  background-image: linear-gradient(110deg, var(--brand-from), var(--brand-to));
+  color: var(--brand-ink);
+}
+@utility text-brand {
+  background-image: linear-gradient(110deg, var(--primary), oklch(0.68 0.15 45));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }

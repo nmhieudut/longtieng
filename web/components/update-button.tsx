@@ -81,7 +81,7 @@ export function UpdateButton() {
 
   return (
     <>
-      <Button size="sm" variant={working ? "outline" : "default"} className="h-8 rounded-full" onClick={() => setOpen(true)}>
+      <Button size="sm" variant={working ? "outline" : "brand"} className="h-8 rounded-full" onClick={() => setOpen(true)}>
         {working ? <Loader2 className="animate-spin" /> : <ArrowDownCircle />}
         {working ? "Đang cập nhật…" : `Có bản mới ${u.latest.version}`}
       </Button>

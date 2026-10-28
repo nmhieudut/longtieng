@@ -1,6 +1,6 @@
 "use client";
 
-import { FileVideo, Film, Layers, Link2, Loader2, Trash2, UploadCloud, X } from "lucide-react";
+import { FileVideo, Film, Layers, Loader2, Trash2, UploadCloud, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -14,20 +14,18 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, type Config, fmt, isActive, type ProjectSummary, upload } from "@/lib/api";
+import { api, type Config, fmt, isActive, posterUrl, type ProjectSummary, upload } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 export default function Home() {
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,520px)_1fr] lg:items-start">
+    <div className="grid gap-5 min-[900px]:grid-cols-[minmax(0,420px)_minmax(0,1fr)] min-[900px]:items-start xl:grid-cols-[minmax(0,480px)_minmax(0,1fr)] lg:gap-6 [&>*]:min-w-0">
       <NewProject />
       <ProjectList />
     </div>
@@ -39,14 +37,12 @@ function NewProject() {
   const [cfg, setCfg] = useState<Config | null>(null);
   const [tab, setTab] = useState("file");
   const [file, setFile] = useState<File | null>(null);
-  const [url, setUrl] = useState("");
   const [lang, setLang] = useState("zh");
   const [voice, setVoice] = useState("");
   const [over, setOver] = useState(false);
   const [sending, setSending] = useState(false);
   const [pct, setPct] = useState<number | null>(null);
   const [files, setFiles] = useState<File[]>([]);
-  const [links, setLinks] = useState("");
   const [autoRender, setAutoRender] = useState(true);
   const [batchMsg, setBatchMsg] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -56,13 +52,10 @@ function NewProject() {
     api.config().then((c) => { setCfg(c); setVoice(c.defaults.voice); }).catch((e) => toast.error(e.message));
   }, []);
 
-  const linkList = links.split(/\s+/).map((x) => x.trim()).filter((x) => /^https?:\/\//.test(x));
-
   async function startBatch() {
     if (!cfg) return;
     const settings = { lang, voice };
-    const total = files.length + linkList.length;
-    if (!total) { toast.error("Chưa chọn video hoặc dán link nào."); return; }
+    if (!files.length) { toast.error("Chưa chọn video nào."); return; }
     setSending(true);
     let ok = 0;
     const failed: string[] = [];
@@ -78,21 +71,11 @@ function NewProject() {
       }
     }
     setPct(null);
-    for (const [i, u] of linkList.entries()) {
-      setBatchMsg(`Đang thêm link ${i + 1}/${linkList.length}`);
-      try {
-        await api.fromUrl(u, settings, autoRender);
-        ok++;
-      } catch (e) {
-        failed.push(`${u}: ${(e as Error).message}`);
-      }
-    }
     setBatchMsg("");
     setSending(false);
     if (ok) {
       toast.success(`Đã xếp ${ok} video vào hàng chờ. App xử lý lần lượt từng video${autoRender ? " và tự xuất" : ""}.`);
       setFiles([]);
-      setLinks("");
       window.dispatchEvent(new Event("projects-changed"));
     }
     if (failed.length) toast.error(`${failed.length} video lỗi:\n${failed.join("\n")}`);
@@ -104,16 +87,10 @@ function NewProject() {
     const settings = { lang, voice };
     setSending(true);
     try {
-      let p;
-      if (tab === "file") {
-        if (!file) throw new Error("Chưa chọn video.");
-        if (file.size > cfg.max_upload_mb * 1048576) throw new Error(`File lớn hơn ${cfg.max_upload_mb}MB.`);
-        setPct(0);
-        p = await upload(file, settings, setPct);
-      } else {
-        if (!url.trim()) throw new Error("Chưa dán link.");
-        p = await api.fromUrl(url.trim(), settings);
-      }
+      if (!file) throw new Error("Chưa chọn video.");
+      if (file.size > cfg.max_upload_mb * 1048576) throw new Error(`File lớn hơn ${cfg.max_upload_mb}MB.`);
+      setPct(0);
+      const p = await upload(file, settings, setPct);
       router.push(`/project?id=${p.id}`);
     } catch (e) {
       toast.error((e as Error).message);
@@ -125,24 +102,23 @@ function NewProject() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-lg">Video mới</CardTitle>
+        <CardTitle className="text-2xl font-bold tracking-[-0.025em]">Video mới</CardTitle>
         <CardDescription>Nhận dạng giọng nói (Trung, Anh, Nhật, Hàn, Thái), dịch sang tiếng Việt và lồng tiếng tự động.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="w-full">
-            <TabsTrigger value="file"><UploadCloud /> Tải file lên</TabsTrigger>
-            <TabsTrigger value="url"><Link2 /> Dán link</TabsTrigger>
-            <TabsTrigger value="batch"><Layers /> Nhiều video</TabsTrigger>
+            <TabsTrigger value="file" className="min-w-0"><UploadCloud /> <span className="truncate">Một video</span></TabsTrigger>
+            <TabsTrigger value="batch" className="min-w-0"><Layers /> <span className="truncate">Nhiều video</span></TabsTrigger>
           </TabsList>
           <TabsContent value="batch" className="mt-3 grid gap-3">
             <button type="button" onClick={() => multi.current?.click()}
               onDragOver={(e) => { e.preventDefault(); setOver(true); }}
               onDragLeave={() => setOver(false)}
               onDrop={(e) => { e.preventDefault(); setOver(false); setFiles((xs) => [...xs, ...Array.from(e.dataTransfer.files)]); }}
-              className={cn("flex w-full flex-col items-center gap-1.5 rounded-xl border-2 border-dashed px-4 py-6 text-center transition-colors",
-                over ? "border-primary bg-primary/5" : "hover:border-primary/60 hover:bg-muted/60")}>
-              <Layers className="size-7 text-muted-foreground" />
+              className={cn("flex w-full min-w-0 flex-col items-center gap-1.5 rounded-xl border-[1.5px] border-dashed border-input bg-muted/40 px-4 py-6 text-center transition-colors",
+                over ? "border-primary bg-primary/5" : "hover:border-primary/60 hover:bg-accent")}>
+              <Layers className="size-7 text-primary" />
               <span className="font-medium">Kéo nhiều video vào đây hoặc bấm để chọn</span>
               <span className="text-xs text-muted-foreground">Chọn được nhiều file cùng lúc</span>
             </button>
@@ -162,8 +138,6 @@ function NewProject() {
                 ))}
               </ul>
             )}
-            <Textarea rows={3} placeholder={"Hoặc dán nhiều link, mỗi link một dòng\nhttps://www.youtube.com/…\nhttps://www.tiktok.com/…"}
-              value={links} onChange={(e) => setLinks(e.target.value)} />
             <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/60 px-3 py-2">
               <div>
                 <p className="text-sm font-medium">Tự lồng tiếng & xuất video</p>
@@ -185,19 +159,19 @@ function NewProject() {
               onDragLeave={() => setOver(false)}
               onDrop={(e) => { e.preventDefault(); setOver(false); setFile(e.dataTransfer.files[0] ?? null); }}
               className={cn(
-                "flex w-full flex-col items-center gap-2 rounded-xl border-2 border-dashed px-4 py-10 text-center transition-colors",
-                over ? "border-primary bg-primary/5" : "hover:border-primary/60 hover:bg-muted/60",
+                "flex w-full min-w-0 flex-col items-center gap-2 rounded-xl border-[1.5px] border-dashed border-input bg-muted/40 px-4 py-9 text-center transition-colors sm:py-11",
+                over ? "border-primary bg-primary/5" : "hover:border-primary/60 hover:bg-accent",
               )}
             >
               {file ? (
                 <>
                   <FileVideo className="size-8 text-primary" />
-                  <span className="max-w-full truncate font-medium">{file.name}</span>
+                  <span className="block w-full truncate font-medium" title={file.name}>{file.name}</span>
                   <span className="text-xs text-muted-foreground">{(file.size / 1048576).toFixed(1)} MB · bấm để đổi file</span>
                 </>
               ) : (
                 <>
-                  <UploadCloud className="size-8 text-muted-foreground" />
+                  <span className="mb-1 grid size-12 place-items-center rounded-full bg-brand"><UploadCloud className="size-5" /></span>
                   <span className="font-medium">Kéo video vào đây hoặc bấm để chọn</span>
                   <span className="text-xs text-muted-foreground">
                     mp4, mov, webm{cfg && ` · tối đa ${cfg.max_upload_mb}MB · ${cfg.max_duration_min} phút`}
@@ -212,18 +186,6 @@ function NewProject() {
               accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mkv,.m4v"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             />
-          </TabsContent>
-          <TabsContent value="url" className="mt-3 grid gap-2">
-            <Input
-              type="url"
-              placeholder="https://www.douyin.com/… hoặc YouTube, TikTok, Bilibili"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && start()}
-            />
-            <p className="text-xs text-muted-foreground">
-              Douyin hay chặn tải tự động. Nếu lỗi, tải video về máy rồi dùng “Tải file lên”.
-            </p>
           </TabsContent>
         </Tabs>
 
@@ -252,9 +214,9 @@ function NewProject() {
         )}
         {pct === null && batchMsg && <span className="text-xs text-muted-foreground">{batchMsg}</span>}
 
-        <Button size="lg" className="h-10" disabled={sending || !cfg} onClick={start}>
+        <Button variant="brand" size="lg" className="h-11 rounded-xl text-[0.95rem]" disabled={sending || !cfg} onClick={start}>
           {sending ? <Loader2 className="animate-spin" /> : <Film />}
-          {tab === "batch" ? `Bắt đầu ${files.length + linkList.length || ""} video`.replace("  ", " ") : "Bắt đầu"}
+          {tab === "batch" ? `Bắt đầu ${files.length || ""} video`.replace("  ", " ") : "Bắt đầu"}
         </Button>
       </CardContent>
     </Card>
@@ -294,27 +256,25 @@ function ProjectList() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-lg">Dự án</CardTitle>
+        <CardTitle className="text-2xl font-bold tracking-[-0.025em]">Dự án</CardTitle>
         <CardDescription>{list ? `${list.length} video` : "Đang tải…"}</CardDescription>
       </CardHeader>
       <CardContent>
         {!list ? (
           <div className="grid gap-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-16" />)}</div>
         ) : list.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed py-12 text-center text-muted-foreground">
-            <Film className="size-8" />
+          <div className="flex flex-col items-center gap-2 rounded-xl border-[1.5px] border-dashed border-input py-14 text-center text-muted-foreground">
+            <Film className="size-8 text-primary/70" />
             <p>Chưa có dự án nào. Thêm video ở bên trái để bắt đầu.</p>
           </div>
         ) : (
-          <ul className="divide-y">
+          <ul className="-mx-2 flex flex-col gap-0.5">
             {list.map((p) => (
-              <li key={p.id} className="group flex items-center gap-3 py-3 first:pt-0 last:pb-0">
-                <Link href={`/project?id=${p.id}`} className="flex min-w-0 flex-1 items-center gap-3">
-                  <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary">
-                    <Film className="size-5" />
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block truncate font-medium group-hover:text-primary">{p.title}</span>
+              <li key={p.id} className="group flex min-w-0 items-center gap-2 rounded-xl px-2 py-2 transition-colors hover:bg-accent/70 sm:gap-3">
+                <Link href={`/project?id=${p.id}`} className="flex min-w-0 flex-1 items-center gap-3 rounded-lg outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+                  <Poster key={`${p.id}-${p.duration ?? 0}`} id={p.id} ready={!!p.duration} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium" title={p.title}>{p.title}</span>
                     <span className="block truncate text-xs text-muted-foreground">
                       {[
                         new Date(p.created * 1000).toLocaleString("vi-VN", { dateStyle: "short", timeStyle: "short" }),
@@ -348,5 +308,20 @@ function ProjectList() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/** Frame from the video; the film icon until the video is downloaded or if the frame can't be made. */
+function Poster({ id, ready }: { id: string; ready: boolean }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <span className="relative grid size-14 shrink-0 place-items-center overflow-hidden rounded-xl bg-secondary text-primary ring-1 ring-border transition-shadow group-hover:ring-2 group-hover:ring-primary/40">
+      <Film className="size-5" />
+      {ready && !failed && (
+        // eslint-disable-next-line @next/next/no-img-element -- static export, served by the local app
+        <img src={posterUrl(id)} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)}
+          className="absolute inset-0 size-full object-cover" />
+      )}
+    </span>
   );
 }

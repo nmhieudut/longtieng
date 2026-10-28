@@ -48,7 +48,7 @@ export function VideoPanel({ project: p, videoRef, src, view, onView, time, acti
         )}
         {mask.enabled && view === "source" && box && (
           <div
-            className="pointer-events-none absolute border-2 border-dashed border-emerald-400 bg-emerald-400/15"
+            className="pointer-events-none absolute border-2 border-dashed border-orange-300 bg-orange-300/15"
             style={{
               left: box.x,
               width: box.w,
@@ -56,7 +56,7 @@ export function VideoPanel({ project: p, videoRef, src, view, onView, time, acti
               height: (box.h * mask.height) / 100,
             }}
           >
-            <span className="absolute -top-5 left-1 rounded bg-emerald-500 px-1.5 text-[10px] font-medium text-white">vùng che</span>
+            <span className="absolute -top-5 left-1 rounded bg-orange-400 px-1.5 text-[10px] font-medium text-white">vùng che</span>
           </div>
         )}
       </div>

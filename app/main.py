@@ -9,11 +9,11 @@ from pathlib import Path
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from . import dub, jobs, logos, music, ocr, publish, render, store, stt, translate, update
+from . import dub, jobs, logos, media, music, ocr, publish, render, store, stt, translate, update
 from .frame import ASPECTS
 from .media import MediaError
 from .config import (
-    APP_VERSION, DATA_DIR, DEFAULT_SETTINGS, FROZEN, MAX_DURATION_MIN, MAX_UPLOAD_MB, OPENAI_MODEL, USER_DIR, VOICES, WEB_DIR,
+    APP_VERSION, DATA_DIR, DEFAULT_SETTINGS, FFMPEG, FROZEN, MAX_DURATION_MIN, MAX_UPLOAD_MB, OPENAI_MODEL, USER_DIR, VOICES, WEB_DIR,
     SOURCE_LANGS, demucs_available, openai_key, save_user_settings,
 )
 
@@ -529,6 +529,31 @@ def segment_tts(pid: str, sid: int):
         return _view(store.update(pid, lambda q: q.__setitem__("edited_at", time.time())))
     except RuntimeError as e:
         raise HTTPException(502, str(e))
+
+
+@app.get("/api/projects/{pid}/poster")
+def poster(pid: str):
+    """Small frame for the project list. Made once from the source video, then cached."""
+    p = _load(pid)
+    d = store.pdir(pid)
+    out = d / "thumbs" / "poster.jpg"
+    if not out.exists():
+        src = d / (p["source"].get("file") or "")
+        if not p["source"].get("file") or not src.exists():
+            raise HTTPException(404, "Chưa có video.")
+        dur = (p.get("media") or {}).get("duration") or 0
+        t = min(1.5, dur * 0.2) if dur else 0
+        out.parent.mkdir(exist_ok=True)
+        tmp = out.with_name(f"poster.{threading.get_ident()}.jpg")
+        try:
+            media.run([FFMPEG, "-y", "-v", "error", "-ss", f"{t:.2f}", "-i", str(src), "-frames:v", "1",
+                       "-vf", "scale=240:240:force_original_aspect_ratio=increase,crop=240:240", "-q:v", "4",
+                       str(tmp)], timeout=30)
+            tmp.replace(out)
+        except Exception as e:  # ffmpeg error, timeout, disk
+            tmp.unlink(missing_ok=True)
+            raise HTTPException(500, f"Không tạo được ảnh: {e}")
+    return FileResponse(out, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
 
 
 @app.get("/api/projects/{pid}/still")

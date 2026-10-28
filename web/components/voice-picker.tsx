@@ -64,10 +64,10 @@ export function VoicePicker({
   if (!groups.length) return <div className="h-24 animate-pulse rounded-lg bg-muted" />;
 
   return (
-    <div className={cn("grid grid-cols-[minmax(0,1fr)] gap-4 overflow-y-auto rounded-lg border p-2", className)} role="radiogroup" aria-label="Giọng đọc">
+    <div className={cn("grid grid-cols-[minmax(0,1fr)] gap-4 overflow-y-auto rounded-xl border p-2", className)} role="radiogroup" aria-label="Giọng đọc">
       {groups.map(([group, items]) => (
-        <div key={group} className="grid gap-1">
-          <p className="px-2 pt-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{group}</p>
+        <div key={group} className="grid grid-cols-[minmax(0,1fr)] gap-1">
+          <p className="px-2 pt-1 text-xs font-medium text-muted-foreground">{group}</p>
           {items.map(([id, v]) => {
             const selected = id === value;
             const isPlaying = playing.id === id;
@@ -80,7 +80,7 @@ export function VoicePicker({
                 onClick={() => !disabled && onChange(id)}
                 onKeyDown={(e) => { if (!disabled && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onChange(id); } }}
                 className={cn(
-                  "flex cursor-pointer items-center gap-3 rounded-md border border-transparent px-2 py-1.5 outline-none transition-colors",
+                  "flex min-w-0 cursor-pointer items-center gap-3 rounded-lg border border-transparent px-2 py-1.5 outline-none transition-colors",
                   "hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50",
                   selected && "border-primary/40 bg-primary/10 hover:bg-primary/10",
                   disabled && "cursor-not-allowed opacity-60",

@@ -147,7 +147,7 @@ export function ProjectView({ id }: { id: string }) {
   const previewAt = view === "preview" ? 0 : time;
 
   return (
-    <div className="grid gap-5">
+    <div className="grid gap-5 [&>*]:min-w-0">
       {offline && (
         <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           <WifiOff className="size-4 shrink-0" />
@@ -155,19 +155,19 @@ export function ProjectView({ id }: { id: string }) {
         </div>
       )}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-        <Link href="/" aria-label="Về danh sách" className="grid size-8 place-items-center rounded-lg border bg-background hover:bg-muted">
+        <Link href="/" aria-label="Về danh sách" className="grid size-9 shrink-0 place-items-center rounded-xl border bg-card hover:bg-accent">
           <ArrowLeft className="size-4" />
         </Link>
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-lg font-semibold">{p.title}</h1>
+          <h1 className="truncate font-heading text-xl font-bold tracking-[-0.02em]" title={p.title}>{p.title}</h1>
         </div>
         <StageBadge stage={p.status.stage} hasFinal={!!p.outputs.final} progress={p.status.progress} />
         <div className="w-full sm:w-auto"><Steps project={p} /></div>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(340px,460px)_1fr] lg:items-start">
-        <div className="grid min-w-0 gap-5">
-          <Card className="p-3">
+      <div className="grid gap-5 lg:grid-cols-[minmax(340px,460px)_minmax(0,1fr)] lg:items-start [&>*]:min-w-0">
+        <div className="grid min-w-0 gap-5 [&>*]:min-w-0">
+          <Card className="p-3 sm:p-3">
             <VideoPanel
               project={p}
               videoRef={videoRef}
