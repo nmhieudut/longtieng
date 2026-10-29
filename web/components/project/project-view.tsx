@@ -228,6 +228,8 @@ export function ProjectView({ id }: { id: string }) {
                 previewAt={previewAt}
                 subStyles={cfg?.sub_styles ?? {}}
                 reviewStyles={cfg?.review_styles ?? {}}
+                targetLangs={cfg?.target_langs ?? {}}
+                translatedTo={p.translated_to ?? "vi"}
                 onRewrite={async () => { await run(() => api.rewrite(id)); }}
                 settings={p.settings}
                 voices={cfg?.voices ?? {}}

@@ -12,7 +12,7 @@ import soundfile as sf
 
 from .config import (
     DATA_DIR, FFMPEG, MAX_ATEMPO, MAX_EDGE_SPEEDUP,
-    OPENAI_TTS_MODEL, SAMPLE_RATE, VI_CHARS_PER_SEC, openai_key,
+    OPENAI_TTS_MODEL, SAMPLE_RATE, openai_key, target_info,
 )
 from . import cancel
 from .media import decode_mono, trim_silence
@@ -42,8 +42,8 @@ def classify(speech_secs: float, slot_secs: float, speed: float = 1.0) -> dict:
     return {"status": status, "need": round(need, 2), "speed": round(speed, 2)}
 
 
-def estimate(text: str, slot_secs: float, rate: float) -> dict:
-    secs = len(text) / (VI_CHARS_PER_SEC * rate)
+def estimate(text: str, slot_secs: float, rate: float, target: str = "vi") -> dict:
+    secs = len(text) / (target_info(target)["cps"] * rate)
     return classify(secs, slot_secs) | {"estimated": True}
 
 
@@ -51,8 +51,9 @@ def _rate_str(r: float) -> str:
     return f"{round((r - 1) * 100):+d}%"
 
 
-_OPENAI_TTS_INSTRUCTIONS = ("Đọc bằng tiếng Việt chuẩn như người Việt bản xứ, tự nhiên, rõ ràng, "
-                            "giọng lồng tiếng video ngắn, không đọc quá chậm.")
+# language-neutral on purpose: the voice reads whatever language the text is in
+_OPENAI_TTS_INSTRUCTIONS = ("Read the text in its own language like a native speaker: natural, clear, the voice of a "
+                            "short-video dub, not too slow.")
 _openai_client = None
 _openai_client_key = ""
 
@@ -120,10 +121,10 @@ def _encode(src: Path, rate: float, out: Path) -> None:
         raise RuntimeError("ffmpeg lỗi: " + res.stderr[-300:])
 
 
-def _google_raw(text: str, out: Path) -> None:
+def _google_raw(text: str, out: Path, lang: str = "vi") -> None:
     from gtts import gTTS
 
-    gTTS(text, lang="vi", timeout=30).save(str(out))
+    gTTS(text, lang=lang, timeout=30).save(str(out))
 
 
 def _synth(text: str, voice: str, rate: float, out: Path) -> None:
@@ -135,8 +136,9 @@ def _synth(text: str, voice: str, rate: float, out: Path) -> None:
         base = _cached("vieneu", voice, text, lambda p: vieneu_tts.synth_wav(text, vid, p), ext=".wav")
         return _encode(base, rate, out)
     if voice.startswith("google:"):
-        engine, make = "google", _google_raw
-        last = None
+        engine, last = "google", None
+        code = voice.split(":", 1)[1] or "vi"  # google:vi, google:en, google:zh-CN ...
+        make = lambda t, p: _google_raw(t, p, code)  # noqa: E731
         for attempt in range(3):
             try:
                 base = _cached(engine, voice, text, lambda p: make(text, p))

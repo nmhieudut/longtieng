@@ -121,7 +121,7 @@ def _prepare(pid: str):
         warnings = translate.translate_all(
             segs, media["duration"], lang, p["settings"]["rate"],
             lambda x: step(pid, "translating", x, f"Đang dịch {len(segs)} câu…"),
-            script=p["settings"].get("script"))
+            script=p["settings"].get("script"), target=p["settings"]["target"])
         if finder:
             apply_mask_detection(pid, found_future.result())
     finally:
@@ -129,10 +129,11 @@ def _prepare(pid: str):
             finder.shutdown(wait=False)
 
     for i, s in enumerate(segs):
-        s["fit"] = dub.estimate(s["vi"], dub.slot(segs, i, media["duration"]), p["settings"]["rate"])
+        s["fit"] = dub.estimate(s["vi"], dub.slot(segs, i, media["duration"]), p["settings"]["rate"], p["settings"]["target"])
 
     def fin(q):
         q["segments"] = segs
+        q["translated_to"] = p["settings"]["target"]
         q["detected_lang"] = lang
         q["warnings"] = warnings
         q["status"] = {"stage": "review", "progress": None,
@@ -156,13 +157,15 @@ def _rewrite(pid: str):
     step(pid, "translating", 0, label)
     warnings = translate.translate_all(
         segs, p["media"]["duration"], p.get("detected_lang") or p["settings"]["lang"], p["settings"]["rate"],
-        lambda x: step(pid, "translating", x, label), script=p["settings"]["script"])
+        lambda x: step(pid, "translating", x, label), script=p["settings"]["script"], target=p["settings"]["target"])
     dur = p["media"]["duration"]
     for i, s in enumerate(segs):
-        s["fit"] = dub.estimate(s["vi"], dub.slot(segs, i, dur), p["settings"]["rate"]) if s["vi"].strip() else None
+        s["fit"] = (dub.estimate(s["vi"], dub.slot(segs, i, dur), p["settings"]["rate"], p["settings"]["target"])
+                    if s["vi"].strip() else None)
 
     def fin(q):
         q["segments"] = segs  # old voice clips no longer match the text, so they get remade on export
+        q["translated_to"] = p["settings"]["target"]
         q["warnings"] = warnings
         q["edited_at"] = time.time()
         q["status"] = {"stage": "review", "progress": None,

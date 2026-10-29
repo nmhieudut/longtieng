@@ -1,18 +1,21 @@
-"""Translate segments to Vietnamese: OpenAI first, Google as fallback."""
+"""Translate segments into the target language (Vietnamese by default): OpenAI first, Google as fallback.
+
+The translated text lives in each segment's "vi" field whatever the target language is (old name, kept so
+existing projects keep working)."""
 
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .config import OPENAI_MODEL, VI_CHARS_PER_SEC, lang_info, openai_key
+from .config import OPENAI_MODEL, lang_info, openai_key, target_info
 
 BATCH = 40          # review mode: runs one batch after another so the narration flows
 PAR_BATCH = 24      # faithful translation: small batches, several at once
 PAR_WORKERS = 4
 CONTEXT = 6
 
-SYSTEM = """Bạn là biên dịch viên lồng tiếng video ngắn (Douyin/TikTok/Reels) từ {src} sang tiếng Việt.
+SYSTEM = """Bạn là biên dịch viên lồng tiếng video ngắn (Douyin/TikTok/Reels) từ {src} sang {dst}.
 Yêu cầu:
-- Dịch tự nhiên như người Việt nói, đúng văn nói, giữ giọng điệu gốc.
+- Dịch tự nhiên như người bản ngữ {dst} nói, đúng văn nói, giữ giọng điệu gốc.
 - Bản dịch sẽ được đọc lồng tiếng nên PHẢI NGẮN GỌN: không vượt quá max_chars ký tự của mỗi câu. Lược bớt từ thừa nếu cần, giữ ý chính.
 - Đọc cả các câu xung quanh để hiểu ngữ cảnh, nhưng mỗi id dịch riêng, không gộp, không tách.
 - {names}
@@ -20,8 +23,8 @@ Yêu cầu:
 Trả về JSON: {"items":[{"id":<số>,"vi":"<bản dịch>"}]} với đúng mọi id được gửi."""
 
 
-REVIEW_SYSTEM = """Bạn là người dẫn chuyện của một kênh video ngắn tiếng Việt. Từ lời thoại gốc ({src}) của từng đoạn,
-viết LỜI DẪN tiếng Việt để lồng tiếng thay cho lời thoại, theo phong cách: {style}
+REVIEW_SYSTEM = """Bạn là người dẫn chuyện của một kênh video ngắn {dst}. Từ lời thoại gốc ({src}) của từng đoạn,
+viết LỜI DẪN bằng {dst} để lồng tiếng thay cho lời thoại, theo phong cách: {style}
 Yêu cầu:
 - Kể lại / bình luận chuyện đang diễn ra thay vì dịch sát từng chữ. Có thể đổi sang ngôi kể thứ ba
   ("cô gái", "anh chàng", "ông chủ"...), thêm cảm xúc, câu dẫn dắt, nhưng KHÔNG bịa chi tiết trái với lời gốc.
@@ -36,7 +39,7 @@ REVIEW_STYLES = {
     "drama": ("Review phim kịch tính",
               "giọng kể review phim cuốn hút, hồi hộp, nhấn vào tình tiết và cảm xúc nhân vật, tạo tò mò cho đoạn sau."),
     "funny": ("Kể chuyện hài hước",
-              "giọng kể dí dỏm, bình luận vui, chơi chữ nhẹ nhàng kiểu người Việt, nhưng vẫn kể đúng chuyện."),
+              "giọng kể dí dỏm, bình luận vui, chơi chữ nhẹ nhàng đúng kiểu người bản xứ, nhưng vẫn kể đúng chuyện."),
     "summary": ("Tóm tắt nhanh",
                 "ngắn gọn, rõ ý, giọng bản tin / tóm tắt, đi thẳng vào chuyện gì đang xảy ra."),
     "explain": ("Giải thích, chia sẻ kiến thức",
@@ -46,8 +49,16 @@ REVIEW_STYLES = {
 }
 
 
-def budget(seconds: float, rate: float) -> int:
-    return max(4, int(seconds * VI_CHARS_PER_SEC * rate))
+def budget(seconds: float, rate: float, target: str = "vi") -> int:
+    """Most characters a line may have to be read in `seconds` (Chinese packs far more meaning per character)."""
+    return max(3, int(seconds * target_info(target)["cps"] * rate))
+
+
+def _names_rule(src: str, target: str) -> str:
+    if target == "vi":
+        return lang_info(src)["names"]
+    return (f"Tên riêng, thương hiệu: dùng cách viết quen thuộc trong {target_info(target)['name']} "
+            "(phiên âm nếu cần) và thống nhất trong cả video.")
 
 
 def available_secs(segs: list[dict], i: int, duration: float) -> float:
@@ -56,7 +67,7 @@ def available_secs(segs: list[dict], i: int, duration: float) -> float:
 
 
 def translate_all(segs: list[dict], duration: float, src_lang: str, rate: float, on_progress=None,
-                  script: dict | None = None) -> list[str]:
+                  script: dict | None = None, target: str = "vi") -> list[str]:
     """Fills seg['vi'] in place. Returns list of warnings.
     script = {"mode": "review", "style": ...} asks the AI for narration instead of a faithful translation."""
     warnings = []
@@ -66,7 +77,7 @@ def translate_all(segs: list[dict], duration: float, src_lang: str, rate: float,
         warnings.append("Chế độ review cần OpenAI API key, nên đang dịch sát nghĩa bằng Google.")
     if openai_key():
         try:
-            _openai(segs, duration, rate, src_lang, on_progress, script if review else None)
+            _openai(segs, duration, rate, src_lang, on_progress, script if review else None, target)
         except Exception as e:  # auth / quota / network — fall back to Google
             warnings.append(f"OpenAI lỗi ({type(e).__name__}: {str(e)[:160]}). Đã chuyển sang Google Dịch.")
         todo = [i for i, s in enumerate(segs) if not s["vi"].strip()]
@@ -75,7 +86,7 @@ def translate_all(segs: list[dict], duration: float, src_lang: str, rate: float,
     else:
         warnings.append("Chưa nhập OpenAI API key, đang dùng Google Dịch (chất lượng thấp hơn).")
     if todo:
-        _google(segs, todo, src_lang, on_progress)
+        _google(segs, todo, src_lang, on_progress, target)
     missing = sum(1 for s in segs if not s["vi"].strip())
     if missing:
         warnings.append(f"{missing} câu không dịch được (mạng hoặc Google chặn). Hãy tự điền bản dịch cho các câu trống.")
@@ -107,24 +118,26 @@ def _ask(client, system: str, user: dict, want: set, temperature: float) -> dict
     return got
 
 
-def _items(segs, duration, rate, rng):
+def _items(segs, duration, rate, rng, target="vi"):
     return [{
         "id": segs[i]["id"],
         "text": segs[i]["src"],
-        "max_chars": budget(available_secs(segs, i, duration), rate),
+        "max_chars": budget(available_secs(segs, i, duration), rate, target),
     } for i in rng]
 
 
-def _openai(segs, duration, rate, src_lang, on_progress, script=None):
+def _openai(segs, duration, rate, src_lang, on_progress, script=None, target="vi"):
     from openai import OpenAI
 
     client = OpenAI(api_key=openai_key(), max_retries=2, timeout=90)
     info = lang_info(src_lang)
+    dst = target_info(target)["name"]
+    names = _names_rule(src_lang, target)
     if script:
         style = REVIEW_STYLES.get(script.get("style"), REVIEW_STYLES["drama"])[1]
-        system = REVIEW_SYSTEM.format(src=info["name"], style=style, names=info["names"])
-        return _openai_narrate(client, system, segs, duration, rate, on_progress)
-    system = SYSTEM.replace("{src}", info["name"]).replace("{names}", info["names"])
+        system = REVIEW_SYSTEM.format(src=info["name"], dst=dst, style=style, names=names)
+        return _openai_narrate(client, system, segs, duration, rate, on_progress, target)
+    system = (SYSTEM.replace("{src}", info["name"]).replace("{dst}", dst).replace("{names}", names))
 
     # Batches don't depend on each other (context is the neighbouring *source* lines), so run them together.
     ranges = [range(b, min(b + PAR_BATCH, len(segs))) for b in range(0, len(segs), PAR_BATCH)]
@@ -133,7 +146,7 @@ def _openai(segs, duration, rate, src_lang, on_progress, script=None):
         a, z = rng.start, rng.stop
         user = {"context_before": [segs[i]["src"] for i in range(max(0, a - CONTEXT), a)],
                 "context_after": [segs[i]["src"] for i in range(z, min(len(segs), z + 2))],
-                "items": _items(segs, duration, rate, rng)}
+                "items": _items(segs, duration, rate, rng, target)}
         return rng, _ask(client, system, user, {x["id"] for x in user["items"]}, 0.3)
 
     pool = ThreadPoolExecutor(max_workers=min(PAR_WORKERS, len(ranges)))
@@ -151,12 +164,12 @@ def _openai(segs, duration, rate, src_lang, on_progress, script=None):
         pool.shutdown(wait=False, cancel_futures=True)
 
 
-def _openai_narrate(client, system, segs, duration, rate, on_progress):
+def _openai_narrate(client, system, segs, duration, rate, on_progress, target="vi"):
     """Review mode: each batch continues from the narration written so far, so it runs in order."""
     done_ctx: list[str] = []
     for b in range(0, len(segs), BATCH):
         chunk = range(b, min(b + BATCH, len(segs)))
-        items = _items(segs, duration, rate, chunk)
+        items = _items(segs, duration, rate, chunk, target)
         user = {"context_before": done_ctx[-CONTEXT:], "items": items}
         got = _ask(client, system, user, {x["id"] for x in items}, 0.75)
         for i in chunk:
@@ -167,12 +180,12 @@ def _openai_narrate(client, system, segs, duration, rate, on_progress):
             on_progress(min(1.0, (b + BATCH) / len(segs)))
 
 
-def _gtx(text: str, src: str) -> str:
+def _gtx(text: str, src: str, dst: str = "vi") -> str:
     """Google Translate's public `gtx` endpoint (the one deep-translator uses is often 429)."""
     import urllib.parse
     import urllib.request
 
-    q = urllib.parse.urlencode({"client": "gtx", "sl": src, "tl": "vi", "dt": "t", "q": text})
+    q = urllib.parse.urlencode({"client": "gtx", "sl": src, "tl": dst, "dt": "t", "q": text})
     req = urllib.request.Request("https://translate.googleapis.com/translate_a/single?" + q,
                                  headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=20) as r:
@@ -180,15 +193,16 @@ def _gtx(text: str, src: str) -> str:
     return "".join(part[0] for part in data[0] if part and part[0]).strip()
 
 
-def _google(segs, idxs, src_lang, on_progress=None):
+def _google(segs, idxs, src_lang, on_progress=None, target="vi"):
     import time
 
     src = lang_info(src_lang)["google"]
+    dst = target_info(target)["google"]
 
     def one(i):
         for attempt in range(3):
             try:
-                segs[i]["vi"] = _gtx(segs[i]["src"], src)
+                segs[i]["vi"] = _gtx(segs[i]["src"], src, dst)
                 return
             except Exception:
                 time.sleep(1.5 * (attempt + 1))

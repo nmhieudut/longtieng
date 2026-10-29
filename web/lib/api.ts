@@ -13,6 +13,7 @@ export type Segment = {
 
 export type Settings = {
   lang: string; // key of Config.langs
+  target: string; // key of Config.target_langs: the language the video is dubbed into
   voice: string;
   rate: number;
   audio_mode: "duck" | "demucs" | "mute";
@@ -57,6 +58,7 @@ export type Project = {
     cover?: { t: number; title: string; position: CoverPos; file: string; at: number };
   };
   mask_detect?: { found: boolean; bottom?: number; height?: number };
+  translated_to?: string; // language the lines are in now (missing = Vietnamese, from before this existed)
   outputs: Partial<Record<"preview" | "final" | "srt" | "json" | "txt", Output>> & { saved?: SavedCopy };
   busy: boolean;
 };
@@ -71,7 +73,11 @@ export type ProjectSummary = {
   has_final: boolean;
 };
 
-export type VoiceInfo = { label: string; group: string; gender: string; note: string };
+export type VoiceInfo = { label: string; group: string; gender: string; note: string; langs: string[] };
+
+/** The voices that can read this dubbing language. */
+export const voicesFor = (voices: Record<string, VoiceInfo>, target: string) =>
+  Object.fromEntries(Object.entries(voices).filter(([, v]) => v.langs.includes(target)));
 
 export type Config = {
   voices: Record<string, VoiceInfo>;
@@ -81,6 +87,7 @@ export type Config = {
   translator: string;
   features: { demucs: boolean };
   langs: Record<string, string>;
+  target_langs: Record<string, { label: string; voice: string }>;
   sub_styles: Record<string, string>;
   review_styles: Record<string, string>;
   user_defaults: boolean;

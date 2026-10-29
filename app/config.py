@@ -153,9 +153,12 @@ for _f in (RES_DIR / "assets" / "fonts").glob("*.ttf"):
 # user's machine. Point it at a tiny one that only knows our font folder.
 if FROZEN or os.getenv("LONGTIENG_FONTCONFIG"):
     _fc = USER_DIR / "fontconfig.conf"  # not inside FONTS_DIR: libass tries to load every file there
+    # Windows: also the system fonts, for subtitles in Chinese / Japanese / Korean / Thai (Microsoft YaHei, Yu Gothic,
+    # Malgun Gothic, Leelawadee UI). macOS finds its own fallback fonts without this.
+    _sys_fonts = f"  <dir>{Path(os.getenv('WINDIR') or 'C:/Windows') / 'Fonts'}</dir>\n" if IS_WIN else ""
     _fc.write_text(
         f"""<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig>
-  <dir>{FONTS_DIR}</dir>\n  <cachedir>{USER_DIR / "fontcache"}</cachedir>\n</fontconfig>\n""",
+  <dir>{FONTS_DIR}</dir>\n{_sys_fonts}  <cachedir>{USER_DIR / "fontcache"}</cachedir>\n</fontconfig>\n""",
         encoding="utf-8")
     os.environ["FONTCONFIG_FILE"] = str(_fc)
 
@@ -167,12 +170,39 @@ def fonts_rel(cwd: Path) -> str:
 
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip()
 
+# Language the video is dubbed INTO. "cps" = characters a TTS voice reads per second at 1.0x (measured with the
+# Edge voices on a normal sentence; used to size translations and to estimate whether a line will fit).
+TARGET_LANGS: dict[str, dict] = {
+    "vi": {"label": "Tiếng Việt", "name": "tiếng Việt", "google": "vi", "voice": "google:vi", "cps": 17.0,
+           "font_mac": "Be Vietnam Pro", "font_win": "Be Vietnam Pro", "cjk": False},
+    "en": {"label": "Tiếng Anh", "name": "tiếng Anh", "google": "en", "voice": "en-US-AriaNeural", "cps": 16.0,
+           "font_mac": "Be Vietnam Pro", "font_win": "Be Vietnam Pro", "cjk": False},
+    "zh": {"label": "Tiếng Trung", "name": "tiếng Trung (giản thể)", "google": "zh-CN", "voice": "zh-CN-XiaoxiaoNeural",
+           "cps": 5.0, "font_mac": "PingFang SC", "font_win": "Microsoft YaHei", "cjk": True},
+    "ja": {"label": "Tiếng Nhật", "name": "tiếng Nhật", "google": "ja", "voice": "ja-JP-NanamiNeural", "cps": 5.5,
+           "font_mac": "Hiragino Sans", "font_win": "Yu Gothic", "cjk": True},
+    "ko": {"label": "Tiếng Hàn", "name": "tiếng Hàn", "google": "ko", "voice": "ko-KR-SunHiNeural", "cps": 7.5,
+           "font_mac": "Apple SD Gothic Neo", "font_win": "Malgun Gothic", "cjk": True},
+}
+
+
+def target_info(code: str | None) -> dict:
+    return TARGET_LANGS.get(code or "vi", TARGET_LANGS["vi"])
+
+
+def sub_font(target: str | None) -> str:
+    """Font family for burned-in subtitles in this language. Latin scripts use the bundled font; the others
+    use a font every Mac / Windows already has."""
+    info = target_info(target)
+    return info["font_win" if IS_WIN else "font_mac"]
+
 
 def _voices() -> dict[str, dict]:
+    """id -> {label, group, gender, note, langs}. `langs` = target languages the voice can read."""
     v = {}
 
-    def add(vid, label, group, gender, note=""):
-        v[vid] = {"label": label, "group": group, "gender": gender, "note": note}
+    def add(vid, label, group, gender, note="", langs=("vi",)):
+        v[vid] = {"label": label, "group": group, "gender": gender, "note": note, "langs": list(langs)}
 
     main = "Giọng chính"
     add("google:vi", "Chị Google", main, "nữ", "Giọng Google Dịch quen thuộc, vui, rõ ràng · miễn phí")
@@ -189,11 +219,29 @@ def _voices() -> dict[str, dict]:
         ("ko-KR-HyunsuMultilingualNeural", "Hyunsu", "nam"),
     ]
     for vid, name, g in multi:
-        add(vid, name, "Đa ngôn ngữ (Edge, miễn phí)", g, "Có thể hơi lơ lớ")
+        # the English ones are also natural in English; the rest only claim Vietnamese
+        add(vid, name, "Đa ngôn ngữ (Edge, miễn phí)", g, "Có thể hơi lơ lớ",
+            langs=("vi", "en") if vid.startswith("en-") else ("vi", "ko") if vid.startswith("ko-") else ("vi",))
+    # other languages: a few Edge voices (checked against Edge's own voice list) and Google's voice
+    others = {
+        "en": [("en-US-AriaNeural", "Aria", "nữ"), ("en-US-JennyNeural", "Jenny", "nữ"), ("en-US-GuyNeural", "Guy", "nam"),
+               ("en-GB-SoniaNeural", "Sonia (Anh)", "nữ"), ("en-GB-RyanNeural", "Ryan (Anh)", "nam")],
+        "zh": [("zh-CN-XiaoxiaoNeural", "Xiaoxiao", "nữ"), ("zh-CN-XiaoyiNeural", "Xiaoyi", "nữ"),
+               ("zh-CN-YunxiNeural", "Yunxi", "nam"), ("zh-CN-YunjianNeural", "Yunjian", "nam"),
+               ("zh-CN-YunyangNeural", "Yunyang", "nam")],
+        "ja": [("ja-JP-NanamiNeural", "Nanami", "nữ"), ("ja-JP-KeitaNeural", "Keita", "nam")],
+        "ko": [("ko-KR-SunHiNeural", "SunHi", "nữ"), ("ko-KR-InJoonNeural", "InJoon", "nam")],
+    }
+    for lang, items in others.items():
+        grp = f"{TARGET_LANGS[lang]['label']} (Edge, miễn phí)"
+        for vid, name, g in items:
+            add(vid, name, grp, g, langs=(lang,))
+        add(f"google:{TARGET_LANGS[lang]['google']}", "Google", grp, "nữ", "Giọng Google Dịch · miễn phí", langs=(lang,))
     # listed even without a key so the picker is stable; dub.py says when the key is missing
     for name, g in [("coral", "nữ"), ("nova", "nữ"), ("shimmer", "nữ"), ("sage", "nữ"),
                     ("ash", "nam"), ("onyx", "nam"), ("echo", "nam"), ("verse", "nam")]:
-        add(f"openai:{name}", name.capitalize(), "OpenAI (cần API key, ~0,015$/phút)", g, "Biểu cảm hơn, đọc chậm hơn")
+        add(f"openai:{name}", name.capitalize(), "OpenAI (cần API key, ~0,015$/phút)", g, "Biểu cảm hơn, đọc chậm hơn",
+            langs=tuple(TARGET_LANGS))
     from . import vieneu_tts  # offline voices: only listed when this build has the package
 
     if vieneu_tts.available():
@@ -203,18 +251,27 @@ def _voices() -> dict[str, dict]:
     return v
 
 
+def voice_ok(voice: str, target: str) -> bool:
+    v = VOICES.get(voice)
+    return bool(v and target in v["langs"])
+
+
+def default_voice(target: str) -> str:
+    return target_info(target)["voice"]
+
+
 VOICES = _voices()
 
 # Vietnamese TTS speaks roughly this many characters per second at 1.0x.
 # Used to estimate whether a line fits before any audio exists.
-VI_CHARS_PER_SEC = 17.0  # measured ~16–19 on HoaiMy at 1.0x
+VI_CHARS_PER_SEC = 17.0  # measured ~16–19 on HoaiMy at 1.0x (see TARGET_LANGS for the other languages)
 # Edge TTS speed-up we allow on a single line, then atempo on top of that.
 MAX_EDGE_SPEEDUP = 1.35
 MAX_ATEMPO = 1.15
 
 SAMPLE_RATE = 48000
 
-# Spoken language of the source video. Everything is dubbed into Vietnamese.
+# Spoken language of the source video (the dubbing language is chosen separately: TARGET_LANGS).
 SOURCE_LANGS: dict[str, dict] = {
     "zh": {"label": "Tiếng Trung", "name": "tiếng Trung", "google": "zh-CN", "prompt": "以下是普通话的句子。",
            "names": "Tên riêng tiếng Trung: dùng Hán Việt nếu phổ biến, nếu không giữ phiên âm."},
@@ -243,7 +300,8 @@ def lang_info(code: str | None) -> dict:
 
 DEFAULT_SETTINGS = {
     "lang": "zh",              # key of SOURCE_LANGS
-    "voice": "google:vi",
+    "target": "vi",            # key of TARGET_LANGS: the language the video is dubbed into
+    "voice": "google:vi",      # must be able to read `target` (VOICES[voice]["langs"])
     "rate": 1.0,               # 0.8 – 1.3
     "audio_mode": "duck",      # "duck" | "demucs" | "mute"
     "orig_volume": 0.15,       # background volume for duck/demucs

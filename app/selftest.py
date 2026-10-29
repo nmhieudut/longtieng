@@ -189,7 +189,25 @@ def _pipeline(clip: Path) -> str:
             r = c.get(f"/api/projects/{pid}/files/{final['file']}")
             if r.status_code != 200 or len(r.content) < 10_000:
                 raise RuntimeError("video xuất ra rỗng")
-            return f"final.mp4 {len(r.content) // 1024} KB"
+            size_vi = len(r.content) // 1024
+
+            # the same video dubbed into Japanese: new language -> rewrite the lines -> export (CJK subtitles + voice)
+            r = c.patch(f"/api/projects/{pid}/settings", json={"target": "ja", "voice": "google:ja"})
+            r.raise_for_status()
+            if c.post(f"/api/projects/{pid}/render", json={"preview_start": None}).status_code != 400:
+                raise RuntimeError("đổi ngôn ngữ đích mà vẫn xuất được khi chưa viết lại lời thoại")
+            c.post(f"/api/projects/{pid}/rewrite").raise_for_status()
+            p = _wait(c, pid, {"review"}, 600)
+            line = p["segments"][0]["vi"]
+            if not any("\u3040" <= ch <= "\u30ff" or "\u4e00" <= ch <= "\u9fff" for ch in line):
+                raise RuntimeError(f"lời thoại không phải tiếng Nhật: {line!r}")
+            print(f"       ja: {line}", flush=True)
+            c.post(f"/api/projects/{pid}/render", json={"preview_start": None}).raise_for_status()
+            p = _wait(c, pid, {"done"}, 900)
+            r = c.get(f"/api/projects/{pid}/files/{p['outputs']['final']['file']}")
+            if r.status_code != 200 or len(r.content) < 10_000:
+                raise RuntimeError("video tiếng Nhật xuất ra rỗng")
+            return f"final.mp4 {size_vi} KB, bản tiếng Nhật {len(r.content) // 1024} KB"
     finally:
         server.should_exit = True
 

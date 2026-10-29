@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import cancel
 from . import frame
-from .config import FFMPEG, SUB_FONT, fonts_rel
+from .config import FFMPEG, SUB_FONT, fonts_rel, sub_font, target_info
 from .media import MediaError, extract_audio_full, probe_audio
 
 
@@ -98,6 +98,39 @@ def _clean(text: str) -> str:
     return text.strip().replace("\n", " ").replace("{", "(").replace("}", ")")
 
 
+_CJK_BREAK_AFTER = "，。！？；：、,.!?;:…）」』"
+
+
+def _wrap_cjk(text: str, max_chars: int) -> str:
+    """Chinese, Japanese and Korean text has no spaces, and the subtitle renderer only breaks lines at spaces,
+    so a long sentence would run off both sides of the video. Break it ourselves, preferably after punctuation."""
+    if len(text) <= max_chars:
+        return text
+    clauses, cur = [], ""
+    for ch in text:
+        cur += ch
+        if ch in _CJK_BREAK_AFTER:
+            clauses.append(cur)
+            cur = ""
+    if cur:
+        clauses.append(cur)
+    lines, line = [], ""
+    for c in clauses:
+        while len(c) > max_chars:  # a clause with no punctuation at all
+            if line:
+                lines.append(line)
+                line = ""
+            lines.append(c[:max_chars])
+            c = c[max_chars:]
+        if len(line) + len(c) > max_chars and line:
+            lines.append(line)
+            line = ""
+        line += c
+    if line:
+        lines.append(line)
+    return "\\N".join(l.strip() for l in lines if l.strip())
+
+
 def logo_text_style(st: dict, W: int, H: int) -> tuple[str, str] | None:
     """Channel name in a corner (only when no logo image is set): (style line, dialogue line)."""
     lg = st["logo"]
@@ -124,8 +157,15 @@ def write_ass(segs, duration, media, st, path: Path, offset: float = 0.0, window
         edge_w, shadow = max(4, size // 4), 0  # box padding
     else:
         edge_w, shadow = max(2, size // 14), 1
-    styles = [f"Style: Default,{SUB_FONT},{size},{sty['text']},&H000000FF,{sty['edge']},&H64000000,-1,0,0,0,"
+    styles = [f"Style: Default,{sub_font(st['target'])},{size},{sty['text']},&H000000FF,{sty['edge']},&H64000000,-1,0,0,0,"
               f"100,100,0,0,{sty['border']},{edge_w},{shadow},2,{side},{side},{margin},1"]
+    cjk = target_info(st["target"])["cjk"]
+    per_line = max(6, int((W - 2 * side - 2 * edge_w) / (size * 1.08)))
+
+    def line_text(raw: str) -> str:
+        t = _clean(raw)
+        return _wrap_cjk(t, per_line) if cjk else t
+
     rows = []
     logo = logo_text_style(st, W, H)
     if logo:
@@ -135,10 +175,10 @@ def write_ass(segs, duration, media, st, path: Path, offset: float = 0.0, window
         lines = [s for s in segs if s["vi"].strip()]
         if lines:  # the line on screen at that moment, else the nearest one
             best = min(lines, key=lambda s: 0 if s["start"] <= only_at <= s["end"] else abs(s["start"] - only_at))
-            rows.append(f"Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{_clean(best['vi'])}")
+            rows.append(f"Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{line_text(best['vi'])}")
     elif subs:
         for i, s in enumerate(segs):
-            text = _clean(s["vi"])
+            text = line_text(s["vi"])
             if not text:
                 continue
             a, b = _sub_times(segs, i, duration)

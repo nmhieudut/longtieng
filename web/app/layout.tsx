@@ -18,7 +18,7 @@ const mono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Lồng tiếng",
-  description: "Lồng tiếng video sang tiếng Việt",
+  description: "Lồng tiếng video sang tiếng Việt, Anh, Trung, Nhật, Hàn",
   // the UI is already Vietnamese; browser auto-translate rewrites text nodes and breaks React
   other: { google: "notranslate" },
 };

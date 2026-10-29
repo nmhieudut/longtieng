@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-from .config import DATA_DIR, DEFAULT_SETTINGS
+from .config import DATA_DIR, DEFAULT_SETTINGS, TARGET_LANGS, default_voice, voice_ok
 
 _locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
@@ -43,6 +43,10 @@ def _merge(base: dict, extra: dict) -> dict:
 
 def clean_settings(s: dict) -> dict:
     s = _merge(DEFAULT_SETTINGS, s)
+    if s["target"] not in TARGET_LANGS:
+        s["target"] = "vi"
+    if not voice_ok(s["voice"], s["target"]):  # e.g. the language was changed: use that language's default voice
+        s["voice"] = default_voice(s["target"])
     s["rate"] = min(1.3, max(0.8, float(s["rate"])))
     s["orig_volume"] = min(1.0, max(0.0, float(s["orig_volume"])))
     s["sub_size"] = min(2.0, max(0.5, float(s["sub_size"])))
@@ -68,7 +72,7 @@ def clean_settings(s: dict) -> dict:
 
 
 # Settings worth carrying over to new videos ("Lưu làm mặc định"); the subtitle band is per video.
-DEFAULT_KEYS = ("lang", "voice", "rate", "audio_mode", "orig_volume", "subtitle_mode", "sub_size", "sub_margin",
+DEFAULT_KEYS = ("lang", "target", "voice", "rate", "audio_mode", "orig_volume", "subtitle_mode", "sub_size", "sub_margin",
                 "music", "frame", "logo", "sub_style", "script")
 
 

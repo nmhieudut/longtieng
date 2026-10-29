@@ -20,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, type Config, fmt, isActive, posterUrl, type ProjectSummary, upload } from "@/lib/api";
+import { api, type Config, fmt, isActive, posterUrl, type ProjectSummary, upload, voicesFor } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 export default function Home() {
@@ -38,6 +38,7 @@ function NewProject() {
   const [tab, setTab] = useState("file");
   const [file, setFile] = useState<File | null>(null);
   const [lang, setLang] = useState("zh");
+  const [target, setTarget] = useState("vi");
   const [voice, setVoice] = useState("");
   const [over, setOver] = useState(false);
   const [sending, setSending] = useState(false);
@@ -49,12 +50,12 @@ function NewProject() {
   const multi = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    api.config().then((c) => { setCfg(c); setVoice(c.defaults.voice); }).catch((e) => toast.error(e.message));
+    api.config().then((c) => { setCfg(c); setVoice(c.defaults.voice); setTarget(c.defaults.target); }).catch((e) => toast.error(e.message));
   }, []);
 
   async function startBatch() {
     if (!cfg) return;
-    const settings = { lang, voice };
+    const settings = { lang, target, voice };
     if (!files.length) { toast.error("Chưa chọn video nào."); return; }
     setSending(true);
     let ok = 0;
@@ -84,7 +85,7 @@ function NewProject() {
   async function start() {
     if (!cfg) return;
     if (tab === "batch") return startBatch();
-    const settings = { lang, voice };
+    const settings = { lang, target, voice };
     setSending(true);
     try {
       if (!file) throw new Error("Chưa chọn video.");
@@ -103,7 +104,7 @@ function NewProject() {
     <Card>
       <CardHeader>
         <CardTitle className="text-2xl font-bold tracking-[-0.025em]">Video mới</CardTitle>
-        <CardDescription>Nhận dạng giọng nói (Trung, Anh, Nhật, Hàn, Thái), dịch sang tiếng Việt và lồng tiếng tự động.</CardDescription>
+        <CardDescription>Nhận dạng giọng nói (Trung, Anh, Nhật, Hàn, Thái), dịch sang tiếng Việt, Anh, Trung, Nhật hoặc Hàn và lồng tiếng tự động.</CardDescription>
       </CardHeader>
       <CardContent className="grid grid-cols-[minmax(0,1fr)] gap-5">
         <Tabs value={tab} onValueChange={setTab} className="min-w-0">
@@ -202,8 +203,20 @@ function NewProject() {
         </div>
 
         <div className="grid gap-2">
+          <Label>Lồng tiếng sang</Label>
+          <Select value={target} onValueChange={(t) => { setTarget(t); setVoice(cfg?.target_langs[t]?.voice ?? voice); }}>
+            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {Object.entries(cfg?.target_langs ?? { vi: { label: "Tiếng Việt" } }).map(([k, v]) => (
+                <SelectItem key={k} value={k}>{v.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="grid gap-2">
           <Label>Giọng đọc <span className="font-normal text-muted-foreground">· bấm ▶ để nghe thử</span></Label>
-          <VoicePicker voices={cfg?.voices ?? {}} value={voice} onChange={setVoice} className="max-h-72" />
+          <VoicePicker voices={voicesFor(cfg?.voices ?? {}, target)} value={voice} onChange={setVoice} className="max-h-72" />
         </div>
 
         {pct !== null && (

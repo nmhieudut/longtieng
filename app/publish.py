@@ -9,7 +9,7 @@ import numpy as np
 
 from . import cancel
 from . import frame, render
-from .config import FFMPEG, OPENAI_MODEL, SUB_FONT, openai_key
+from .config import FFMPEG, OPENAI_MODEL, openai_key, sub_font, target_info
 from .media import MediaError
 
 CAPTION_SYSTEM = """Bạn là admin một fanpage Facebook giải trí/review ở Việt Nam, chuyên đăng Reels lồng tiếng video Douyin.
@@ -21,6 +21,16 @@ Dựa vào nội dung video (bản dịch tiếng Việt), viết caption để 
   #tachvang #dienthoaicu #taiche #nghethucong #hayvala. Không dùng hashtag chung chung hay không liên quan.
   Thêm #reels và #xuhuong ở cuối. Mỗi phần tử bắt đầu bằng #.
 Trả về JSON: {"title": "...", "description": "...", "hashtags": ["#...", ...]}"""
+
+# Same job for a video dubbed into another language: the post is written in that language.
+CAPTION_SYSTEM_OTHER = """Bạn là admin một fanpage giải trí/review, chuyên đăng Reels lồng tiếng video ngắn.
+Dựa vào nội dung video (bản dịch {dst}), viết caption để đăng Reels, TOÀN BỘ bằng {dst}, đúng giọng người bản xứ:
+- title: 1 dòng, tối đa 70 ký tự, gây tò mò, giọng thân thiện tự nhiên, có 1–2 emoji phù hợp. Không giật tít sai sự thật.
+- description: 2–3 câu ngắn tóm ý hấp dẫn, kết thúc bằng một câu hỏi mời bình luận.
+- hashtags: 6–8 hashtag bằng {dst}, viết liền, không có khoảng trắng; chữ Latin thì viết thường. Mỗi hashtag nói về đúng
+  thứ xuất hiện trong video (đồ vật, nghề, món ăn, hành động, cảm xúc người xem), là từ người bản xứ hay tìm kiếm.
+  Không dùng hashtag chung chung hay không liên quan. Thêm #reels ở cuối. Mỗi phần tử bắt đầu bằng #.
+Trả về JSON: {{"title": "...", "description": "...", "hashtags": ["#...", ...]}}"""
 
 
 def _no_accents(s: str) -> str:
@@ -37,9 +47,11 @@ def make_caption(proj: dict) -> dict:
     text = "\n".join(lines)[:6000]
     user = {"tieu_de_goc": proj.get("title", ""), "noi_dung_video": text}
     client = OpenAI(api_key=openai_key(), max_retries=2, timeout=60)
+    target = proj["settings"]["target"]
+    system = CAPTION_SYSTEM if target == "vi" else CAPTION_SYSTEM_OTHER.format(dst=target_info(target)["name"])
     r = client.chat.completions.create(
         model=OPENAI_MODEL,
-        messages=[{"role": "system", "content": CAPTION_SYSTEM},
+        messages=[{"role": "system", "content": system},
                   {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
         response_format={"type": "json_object"},
         temperature=0.7,
@@ -51,7 +63,9 @@ def make_caption(proj: dict) -> dict:
     tags = d.get("hashtags") or []
     if isinstance(tags, str):
         tags = tags.split()
-    tags = ["#" + re.sub(r"[^\w]", "", _no_accents(str(t).lstrip("#")).lower()) for t in tags]
+    # Vietnamese hashtags are written without accents; other languages keep their own letters
+    plain = (lambda x: _no_accents(x)) if target == "vi" else (lambda x: x)  # noqa: E731
+    tags = ["#" + re.sub(r"[^\w]", "", plain(str(t).lstrip("#")).lower()) for t in tags]
     return {
         "title": str(d.get("title", "")).strip()[:150],
         "description": str(d.get("description", "")).strip()[:1000],
@@ -143,13 +157,18 @@ def cover(proj_dir: Path, proj: dict, t: float, title: str, position: str) -> Pa
     out_dir = proj_dir / "thumbs"
     out_dir.mkdir(exist_ok=True)
     out = out_dir / "cover.jpg"
-    title = strip_emoji(title).replace("{", "(").replace("}", ")").replace("\n", "\\N")
+    target = proj["settings"]["target"]
+    title = strip_emoji(title).replace("{", "(").replace("}", ")")
     ass = None
     if title:
         size = int(0.1 * min(w, h))
         align = {"top": 8, "middle": 5, "bottom": 2}.get(position, 8)
         margin_v = int(h * 0.1)
         side = int(w * 0.06)
+        if target_info(target)["cjk"]:  # no spaces to break at: wrap by hand
+            title = render._wrap_cjk(title.replace("\n", " "), max(4, int((w - 2 * side) / (size * 1.1))))
+        else:
+            title = title.replace("\n", "\\N")
         ass = out_dir / "cover.ass"
         ass.write_text(f"""[Script Info]
 ScriptType: v4.00+
@@ -160,7 +179,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: T,{SUB_FONT},{size},&H00FFFFFF,&H000000FF,&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,{max(4, size // 9)},{max(2, size // 18)},{align},{side},{side},{margin_v},1
+Style: T,{sub_font(target)},{size},&H00FFFFFF,&H000000FF,&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,{max(4, size // 9)},{max(2, size // 18)},{align},{side},{side},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

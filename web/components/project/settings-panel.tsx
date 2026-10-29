@@ -11,7 +11,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { VoicePicker } from "@/components/voice-picker";
 
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { api, stillUrl } from "@/lib/api";
+import { api, stillUrl, voicesFor } from "@/lib/api";
 
 import { FrameSection, LogoSection, ScriptSection, SubStylePicker } from "./look-sections";
 import { MusicSection } from "./music-section";
@@ -23,6 +23,8 @@ type Props = {
   previewAt: number;                           // video time used for the still preview
   subStyles: Record<string, string>;
   reviewStyles: Record<string, string>;
+  targetLangs: Record<string, { label: string; voice: string }>;
+  translatedTo: string;                        // language the lines are in right now
   onRewrite: () => Promise<void>;
   settings: Settings;
   voices: Record<string, VoiceInfo>;
@@ -36,7 +38,7 @@ type Props = {
 };
 
 export function SettingsPanel({
-  projectId, previewAt, subStyles, reviewStyles, onRewrite,
+  projectId, previewAt, subStyles, reviewStyles, targetLangs, translatedTo, onRewrite,
   settings, voices, canDemucs, disabled, busy, onDraft, onSave, maskDetect, onDetect,
 }: Props) {
   const [detecting, setDetecting] = useState(false);
@@ -136,13 +138,13 @@ export function SettingsPanel({
       <Section value="voice" icon={<Mic />} title="Giọng đọc"
         summary={`${voices[s.voice]?.label ?? s.voice} · ${s.rate.toFixed(2)}×`}>
         <Field label="Bấm ▶ để nghe thử">
-          <VoicePicker voices={voices} value={s.voice} disabled={disabled} onChange={(v) => change({ voice: v })} className="max-h-80" />
+          <VoicePicker voices={voicesFor(voices, s.target)} value={s.voice} disabled={disabled} onChange={(v) => change({ voice: v })} className="max-h-80" />
         </Field>
         <SliderField label="Tốc độ nói" value={s.rate} min={0.8} max={1.3} step={0.05} disabled={disabled}
           show={(v) => `${v.toFixed(2)}×`} onChange={(v) => change({ rate: v })} />
       </Section>
 
-      <ScriptSection s={s} styles={reviewStyles} disabled={disabled} busy={busy} change={change} onRewrite={async () => { await flush(); await onRewrite(); }} />
+      <ScriptSection s={s} styles={reviewStyles} targetLangs={targetLangs} translatedTo={translatedTo} disabled={disabled} busy={busy} change={change} onRewrite={async () => { await flush(); await onRewrite(); }} />
 
       <Section value="audio" icon={<Music />} title="Âm thanh gốc"
         summary={s.audio_mode === "mute" ? "Tắt" : `${s.audio_mode === "duck" ? "Giảm nhỏ" : "Giữ nhạc nền"} · ${Math.round(s.orig_volume * 100)}%`}>
@@ -167,7 +169,7 @@ export function SettingsPanel({
 
       <MusicSection music={s.music} disabled={disabled} onChange={(m) => change({ music: m })} />
 
-      <Section value="subs" icon={<Captions />} title="Phụ đề tiếng Việt"
+      <Section value="subs" icon={<Captions />} title="Phụ đề"
         summary={s.subtitle_mode === "burn" ? `Ghi vào video · ${s.sub_size.toFixed(1)}×` : s.subtitle_mode === "srt" ? "Chỉ file .srt" : "Không"}>
         <ToggleGroup type="single" variant="outline" className="w-full" disabled={disabled}
           value={s.subtitle_mode} onValueChange={(v) => v && change({ subtitle_mode: v as Settings["subtitle_mode"] })}>

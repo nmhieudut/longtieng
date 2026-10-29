@@ -14,7 +14,7 @@ from .frame import ASPECTS
 from .media import MediaError
 from .config import (
     APP_VERSION, DATA_DIR, DEFAULT_SETTINGS, FFMPEG, FROZEN, MAX_DURATION_MIN, MAX_UPLOAD_MB, OPENAI_MODEL, USER_DIR, VOICES, WEB_DIR,
-    SOURCE_LANGS, demucs_available, openai_key, save_user_settings,
+    SOURCE_LANGS, TARGET_LANGS, demucs_available, default_voice, openai_key, save_user_settings, voice_ok,
 )
 
 ACTIVE = {"queued", "downloading", "extracting", "model", "transcribing", "detecting", "translating",
@@ -23,6 +23,7 @@ RENDER_STAGES = {"dubbing", "separating", "rendering"}
 VIDEO_EXT = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
 ENUMS = {
     "lang": set(SOURCE_LANGS),
+    "target": set(TARGET_LANGS),
     "voice": set(VOICES),
     "audio_mode": {"duck", "demucs", "mute"},
     "subtitle_mode": {"burn", "srt", "none"},
@@ -104,6 +105,8 @@ def _check_settings(s: dict, new: bool = False) -> dict:
     for k, allowed in ENUMS.items():
         if k in s and s[k] not in allowed:
             raise HTTPException(400, f"Giá trị không hợp lệ cho {k}: {s[k]!r}")
+    if s.get("voice") and s.get("target") and not voice_ok(s["voice"], s["target"]):
+        raise HTTPException(400, "Giọng này không đọc được ngôn ngữ đích đã chọn.")
     m = s.get("mask")
     if isinstance(m, dict) and "style" in m and m["style"] not in {"blur", "box"}:
         raise HTTPException(400, "Kiểu che phụ đề không hợp lệ.")
@@ -135,7 +138,8 @@ def _refit(p: dict):
     segs = p["segments"]
     for i, s in enumerate(segs):
         if dub.needs_tts(s, st["voice"], st["rate"]):
-            s["fit"] = dub.estimate(s["vi"], dub.slot(segs, i, media["duration"]), st["rate"]) if s["vi"].strip() else None
+            s["fit"] = (dub.estimate(s["vi"], dub.slot(segs, i, media["duration"]), st["rate"], st["target"])
+                        if s["vi"].strip() else None)
 
 
 # ---------- API
@@ -150,6 +154,7 @@ def config():
         "translator": f"OpenAI ({OPENAI_MODEL})" if openai_key() else "Google Dịch (chưa nhập OpenAI API key)",
         "features": {"demucs": demucs_available()},
         "langs": {k: v["label"] for k, v in SOURCE_LANGS.items()},
+        "target_langs": {k: {"label": v["label"], "voice": v["voice"]} for k, v in TARGET_LANGS.items()},
         "sub_styles": {k: v["label"] for k, v in render.SUB_STYLES.items()},
         "review_styles": {k: v[0] for k, v in translate.REVIEW_STYLES.items()},
         "user_defaults": bool(store.user_defaults()),
@@ -436,6 +441,8 @@ def patch_settings(pid: str, settings: dict = Body(...)):
             merged[k] = (p["settings"].get(k) or {}) | (settings.get(k) or {})
         if set(mask_patch) & {"enabled", "bottom", "height"}:
             merged["mask"]["auto"] = False  # the user took over
+        if "target" in settings and "voice" not in settings and not voice_ok(merged["voice"], merged["target"]):
+            merged["voice"] = default_voice(merged["target"])  # new language, so a voice that speaks it
         new = _check_settings(merged)
         if new != store.clean_settings(p["settings"]):
             p["edited_at"] = time.time()  # the exported video no longer matches
@@ -615,6 +622,11 @@ def start_render(pid: str, preview_start: float | None = Body(None, embed=True))
         raise HTTPException(400, "Chưa có bản dịch để lồng tiếng.")
     if p["settings"]["audio_mode"] == "demucs" and not demucs_available():
         raise HTTPException(400, "Bản này không có tách nhạc nền (demucs). Chọn 'Giảm âm gốc' trong Cài đặt âm thanh.")
+    done = p.get("translated_to", "vi")  # projects from before the target language existed were Vietnamese
+    if done != p["settings"]["target"]:
+        raise HTTPException(400, f"Lời thoại đang là {TARGET_LANGS[done]['name']}. Đã đổi ngôn ngữ đích sang "
+                                 f"{TARGET_LANGS[p['settings']['target']]['name']}: mở Cài đặt → Lời thoại và bấm "
+                                 "“Viết lại lời thoại” trước khi xuất.")
     if preview_start is not None:
         dur = p["media"]["duration"]
         preview_start = min(max(0.0, float(preview_start)), max(0.0, dur - 1.0))

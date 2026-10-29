@@ -189,15 +189,34 @@ export function LogoSection({ s, disabled, change }: { s: Settings; disabled: bo
 }
 
 /** Faithful translation or AI narration ("review") in a chosen style, plus "rewrite now". */
-export function ScriptSection({ s, styles, disabled, busy: jobBusy, change, onRewrite }: {
-  s: Settings; styles: Record<string, string>; disabled: boolean; busy: boolean; change: Change;
+export function ScriptSection({ s, styles, targetLangs, translatedTo, disabled, busy: jobBusy, change, onRewrite }: {
+  s: Settings; styles: Record<string, string>; targetLangs: Record<string, { label: string; voice: string }>;
+  translatedTo: string; disabled: boolean; busy: boolean; change: Change;
   onRewrite: () => Promise<void>;
 }) {
   const sc = s.script;
   const [busy, setBusy] = useState(false);
+  const stale = translatedTo !== s.target;
+  const label = (k: string) => targetLangs[k]?.label ?? k;
+  const lower = (k: string) => label(k).replace(/^Tiếng/, "tiếng");  // "Tiếng Việt" -> "tiếng Việt" inside a sentence
   return (
     <Section value="script" icon={<Sparkles />} title="Lời thoại"
-      summary={sc.mode === "review" ? `Review AI · ${styles[sc.style] ?? sc.style}` : "Dịch sát nghĩa"}>
+      summary={`${label(s.target)} · ${sc.mode === "review" ? `Review AI · ${styles[sc.style] ?? sc.style}` : "Dịch sát nghĩa"}`}>
+      <Field label="Lồng tiếng sang">
+        <Select value={s.target} disabled={disabled}
+          onValueChange={(t) => change({ target: t, voice: targetLangs[t]?.voice ?? s.voice })}>
+          <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {Object.entries(targetLangs).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </Field>
+      {stale && (
+        <p className="rounded-lg border border-fast/40 bg-fast/10 px-3 py-2 text-xs text-fast-foreground">
+          Lời thoại hiện là {lower(translatedTo)}. Bấm “Viết lại lời thoại” bên dưới để dịch sang{" "}
+          {lower(s.target)}; chưa viết lại thì chưa xuất video được. Giọng đọc đã tự đổi theo ngôn ngữ mới.
+        </p>
+      )}
       <ToggleGroup type="single" variant="outline" className="w-full" disabled={disabled}
         value={sc.mode} onValueChange={(v) => v && change({ script: { mode: v as "translate" | "review" } })}>
         <ToggleGroupItem value="translate" className="flex-1">Dịch sát nghĩa</ToggleGroupItem>
