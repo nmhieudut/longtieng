@@ -105,8 +105,8 @@ function NewProject() {
         <CardTitle className="text-2xl font-bold tracking-[-0.025em]">Video mới</CardTitle>
         <CardDescription>Nhận dạng giọng nói (Trung, Anh, Nhật, Hàn, Thái), dịch sang tiếng Việt và lồng tiếng tự động.</CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-5">
-        <Tabs value={tab} onValueChange={setTab}>
+      <CardContent className="grid grid-cols-[minmax(0,1fr)] gap-5">
+        <Tabs value={tab} onValueChange={setTab} className="min-w-0">
           <TabsList className="w-full">
             <TabsTrigger value="file" className="min-w-0"><UploadCloud /> <span className="truncate">Một video</span></TabsTrigger>
             <TabsTrigger value="batch" className="min-w-0"><Layers /> <span className="truncate">Nhiều video</span></TabsTrigger>
