@@ -5,7 +5,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 
-from . import cancel, dub, ocr, render, store, stt, translate
+from . import cancel, dub, ocr, outdir, render, store, stt, translate
 from .cancel import Cancelled
 from .config import MAX_DURATION_MIN
 from .media import MediaError, download_url, extract_audio_16k, probe
@@ -270,6 +270,20 @@ def _render(pid: str, preview_start: float | None):
                        "message": "Bản xem thử đã sẵn sàng." if preview else "Xuất video xong!",
                        "error": None}
     store.update(pid, fin)
+    if not preview:
+        deliver(pid)
+
+
+def deliver(pid: str) -> dict:
+    """Copy the finished video to the folder chosen in Cài đặt (if any). Never fails the export."""
+    if outdir.current() is None:
+        return {}
+    p = store.load(pid)
+    d = store.pdir(pid)
+    prev = (p["outputs"].get("saved") or {}).get("path")
+    res = outdir.deliver(d / "out" / "final.mp4", p["title"], pid, prev)
+    store.update(pid, lambda q: q["outputs"].__setitem__("saved", res))
+    return res
 
 
 def line_tts(pid: str, sid: int) -> dict:

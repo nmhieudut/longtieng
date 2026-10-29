@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, ExternalLink, KeyRound, Loader2, Settings } from "lucide-react";
+import { CheckCircle2, ExternalLink, FolderOpen, KeyRound, Loader2, Settings } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, type AppSettings } from "@/lib/api";
+import { api, type AppSettings, desktopApi } from "@/lib/api";
 
 /** App-wide settings (gear icon): OpenAI key, where data lives, speech engine. */
 export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
@@ -17,6 +17,8 @@ export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
   const [key, setKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [folder, setFolder] = useState("");
+  const [savingFolder, setSavingFolder] = useState(false);
 
   async function checkUpdate() {
     setChecking(true);
@@ -35,8 +37,28 @@ export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
   }
 
   useEffect(() => {
-    if (open) api.appSettings().then(setInfo).catch((e) => toast.error(e.message));
+    if (open) api.appSettings().then((i) => { setInfo(i); setFolder(i.output_dir); }).catch((e) => toast.error(e.message));
   }, [open]);
+
+  async function saveFolder(value: string) {
+    setSavingFolder(true);
+    try {
+      const next = await api.saveAppSettings({ output_dir: value });
+      setInfo(next);
+      setFolder(next.output_dir);
+      window.dispatchEvent(new Event("app-settings-changed"));
+      toast.success(next.output_dir ? "Đã lưu. Mỗi video xuất xong sẽ được chép vào thư mục này." : "Đã tắt chép tự động.");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSavingFolder(false);
+    }
+  }
+
+  async function pickFolder() {
+    const picked = await desktopApi()?.pick_folder(folder);
+    if (picked) { setFolder(picked); saveFolder(picked); }
+  }
 
   async function save(value: string) {
     setSaving(true);
@@ -100,6 +122,35 @@ export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
             )}
           </div>
           <p className="text-xs text-muted-foreground">Key chỉ lưu trên máy này, không gửi đi đâu ngoài OpenAI.</p>
+        </div>
+
+        <div className="grid gap-2 border-t pt-4">
+          <Label htmlFor="out-dir" className="flex items-center gap-1.5"><FolderOpen className="size-4" /> Thư mục lưu video xuất</Label>
+          <p className="text-xs text-muted-foreground">
+            Video xuất xong sẽ được chép thêm vào thư mục này. Chọn một thư mục trong Google Drive, OneDrive hoặc Dropbox
+            (cài app của họ trên máy) thì file tự đồng bộ lên đó để dùng ở máy khác.
+          </p>
+          <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); saveFolder(folder); }}>
+            <Input id="out-dir" spellCheck={false} placeholder="Chưa chọn (chỉ lưu trong app)" value={folder}
+              onChange={(e) => setFolder(e.target.value)} className="min-w-0 font-mono text-xs" />
+            {desktopApi() && <Button type="button" variant="outline" onClick={pickFolder} disabled={savingFolder}>Chọn…</Button>}
+            <Button type="submit" disabled={savingFolder || folder.trim() === (info?.output_dir ?? "")}>
+              {savingFolder ? <Loader2 className="animate-spin" /> : null} Lưu
+            </Button>
+          </form>
+          {info && info.output_suggestions.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {info.output_suggestions.map((s) => (
+                <button key={s.path} type="button" title={s.path} disabled={savingFolder}
+                  onClick={() => { setFolder(s.path); saveFolder(s.path); }}
+                  className="rounded-full border px-2.5 py-1 text-xs hover:bg-accent">{s.label}</button>
+              ))}
+            </div>
+          )}
+          {info?.output_dir && (
+            <button type="button" className="justify-self-start text-xs text-destructive underline underline-offset-2"
+              disabled={savingFolder} onClick={() => saveFolder("")}>Tắt chép tự động</button>
+          )}
         </div>
 
         {info && (

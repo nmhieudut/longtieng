@@ -185,6 +185,7 @@ export function ProjectView({ id }: { id: string }) {
           <ExportPanel
             project={p}
             previewAt={previewAt}
+            onSaveToFolder={async () => { await run(() => api.saveToFolder(id)); }}
             onRetry={() => run(() => api.retry(id))}
             onCancel={() => run(() => api.cancel(id))}
             onPreview={() => { pendingShow.current = "preview"; run(() => api.render(id, previewAt)); }}

@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from . import dub, jobs, logos, media, music, ocr, publish, render, store, stt, translate, update
+from . import dub, jobs, logos, media, music, ocr, outdir, publish, render, store, stt, translate, update
 from .frame import ASPECTS
 from .media import MediaError
 from .config import (
@@ -154,6 +154,7 @@ def config():
         "review_styles": {k: v[0] for k, v in translate.REVIEW_STYLES.items()},
         "user_defaults": bool(store.user_defaults()),
         "desktop": FROZEN,
+        "output_dir": str(outdir.current() or ""),
     }
 
 
@@ -170,6 +171,8 @@ def app_settings():
         "stt_engine": stt.engine_label(),
         "stt_model_ready": stt.model_cached(),
         "data_dir": str(USER_DIR),
+        "output_dir": str(outdir.current() or ""),
+        "output_suggestions": outdir.suggestions(),
         "version": APP_VERSION,
     }
 
@@ -208,6 +211,12 @@ def put_app_settings(body: dict = Body(...)):
                     raise HTTPException(502, "Không kết nối được OpenAI để kiểm tra key. Kiểm tra mạng rồi thử lại.")
                 raise HTTPException(400, f"OpenAI từ chối key ({name}).")
         save_user_settings({"openai_key": k})
+    if isinstance(body.get("output_dir"), str):
+        raw = body["output_dir"].strip()
+        try:
+            save_user_settings({"output_dir": str(outdir.validate(raw)) if raw else ""})
+        except ValueError as e:
+            raise HTTPException(400, str(e))
     return app_settings()
 
 
@@ -608,6 +617,20 @@ def start_render(pid: str, preview_start: float | None = Body(None, embed=True))
     except RuntimeError as e:
         store.update(pid, lambda q: q.__setitem__("status", prev))
         raise HTTPException(409, str(e))
+    return _view(store.load(pid))
+
+
+@app.post("/api/projects/{pid}/save-to-folder")
+def save_to_folder(pid: str):
+    """Copy the already exported video into the folder chosen in Cài đặt."""
+    p = _load(pid)
+    if outdir.current() is None:
+        raise HTTPException(400, "Chưa chọn thư mục lưu. Mở Cài đặt (bánh răng) để chọn.")
+    if not p["outputs"].get("final"):
+        raise HTTPException(400, "Video chưa được xuất.")
+    res = jobs.deliver(pid)
+    if res.get("error"):
+        raise HTTPException(400, res["error"])
     return _view(store.load(pid))
 
 

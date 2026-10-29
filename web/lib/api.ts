@@ -57,7 +57,7 @@ export type Project = {
     cover?: { t: number; title: string; position: CoverPos; file: string; at: number };
   };
   mask_detect?: { found: boolean; bottom?: number; height?: number };
-  outputs: Partial<Record<"preview" | "final" | "srt" | "json" | "txt", Output>>;
+  outputs: Partial<Record<"preview" | "final" | "srt" | "json" | "txt", Output>> & { saved?: SavedCopy };
   busy: boolean;
 };
 
@@ -87,12 +87,17 @@ export type Config = {
   desktop: boolean;
 };
 
+/** The exported video copied into the folder chosen in Cài đặt. */
+export type SavedCopy = { path?: string; error?: string; at: number };
+
 export type AppSettings = {
   openai_key_set: boolean;
   openai_key_hint: string;
   stt_engine: string;
   stt_model_ready: boolean;
   data_dir: string;
+  output_dir: string;
+  output_suggestions: { label: string; path: string }[];
   version: string;
 };
 
@@ -136,7 +141,7 @@ const P = (id: string) => `/api/projects/${id}`;
 export const api = {
   config: () => req<Config>("/api/config"),
   appSettings: () => req<AppSettings>("/api/app-settings"),
-  saveAppSettings: (patch: { openai_key?: string }) =>
+  saveAppSettings: (patch: { openai_key?: string; output_dir?: string }) =>
     req<AppSettings>("/api/app-settings", { method: "PUT", body: patch }),
   updateState: (force = false) => req<UpdateState>(`/api/update${force ? "?force=1" : ""}`),
   updateApply: () => req<UpdateState>("/api/update/apply", { method: "POST" }),
@@ -145,6 +150,7 @@ export const api = {
   remove: (id: string) => req<{ ok: boolean }>(P(id), { method: "DELETE" }),
   fromUrl: (url: string, settings: Partial<Settings>, autoRender = false) =>
     req<Project>("/api/projects/url", { method: "POST", body: { url, settings, auto_render: autoRender } }),
+  saveToFolder: (id: string) => req<Project>(`${P(id)}/save-to-folder`, { method: "POST" }),
   rewrite: (id: string) => req<Project>(`${P(id)}/rewrite`, { method: "POST" }),
   saveDefaults: (settings: Settings) => req<{ ok: boolean }>("/api/default-settings", { method: "PUT", body: { settings } }),
   resetDefaults: () => req<{ ok: boolean }>("/api/default-settings", { method: "DELETE" }),
@@ -189,6 +195,7 @@ export const api = {
 type DesktopApi = {
   save_file: (url: string) => Promise<{ saved?: string; cancelled?: boolean; error?: string }>;
   reveal: (path: string) => Promise<void>;
+  pick_folder: (start?: string) => Promise<string | null>;
   copy: (text: string) => Promise<void>;
 };
 export const desktopApi = (): DesktopApi | undefined =>

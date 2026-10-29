@@ -1,10 +1,10 @@
 "use client";
 
 import {
-  AlertTriangle, CheckCircle2, ChevronDown, Clapperboard, Download, FileJson, FileText, Info, Loader2, Play, RotateCcw,
-  Subtitles, X,
+  AlertTriangle, CheckCircle2, ChevronDown, Clapperboard, Download, FileJson, FileText, FolderOpen, Info, Loader2, Play,
+  RotateCcw, Subtitles, X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,7 +12,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
-import { fileUrl, fmt, isActive, type Project, STAGE_LABEL } from "@/lib/api";
+import { api, desktopApi, fileUrl, fmt, isActive, type Project, STAGE_LABEL } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -23,6 +23,7 @@ type Props = {
   onRetry: () => void;
   onCancel: () => Promise<void>;
   onJump: (segIndex: number) => void;   // show a problem line in the list
+  onSaveToFolder: () => Promise<void>;
 };
 
 const ago = (t: number) => {
@@ -33,15 +34,23 @@ const ago = (t: number) => {
   return new Date(t * 1000).toLocaleDateString("vi-VN");
 };
 
-export function ExportPanel({ project: p, previewAt, onPreview, onRender, onRetry, onCancel, onJump }: Props) {
+export function ExportPanel({ project: p, previewAt, onPreview, onRender, onRetry, onCancel, onJump, onSaveToFolder }: Props) {
   const [stopping, setStopping] = useState(false);
+  const [folder, setFolder] = useState("");
+  const [copying, setCopying] = useState(false);
+  useEffect(() => {
+    const load = () => { api.appSettings().then((i) => setFolder(i.output_dir)).catch(() => {}); };
+    load();
+    window.addEventListener("app-settings-changed", load);
+    return () => window.removeEventListener("app-settings-changed", load);
+  }, []);
   const s = p.status;
   const active = isActive(p);
   const hasLines = p.segments.length > 0;
   const final = p.outputs.final;
   const stale = !!final?.at && !!p.edited_at && p.edited_at > final.at;
 
-  const dl = (key: keyof Project["outputs"]) => {
+  const dl = (key: "preview" | "final" | "srt" | "json" | "txt") => {
     const f = p.outputs[key];
     return f ? `${fileUrl(p.id, f.file)}?download=1&t=${f.at ?? ""}` : undefined;
   };
@@ -159,6 +168,8 @@ export function ExportPanel({ project: p, previewAt, onPreview, onRender, onRetr
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
+            <SavedCopyRow saved={p.outputs.saved} folder={folder} copying={copying}
+              onCopy={async () => { setCopying(true); try { await onSaveToFolder(); } finally { setCopying(false); } }} />
             <div className="flex gap-2">
               <Button variant={stale ? "brand" : "outline"} className="flex-1" onClick={onRender}>
                 <RotateCcw /> Xuất lại
@@ -182,6 +193,35 @@ export function ExportPanel({ project: p, previewAt, onPreview, onRender, onRetr
         {p.warnings.length > 0 && <Notes items={p.warnings} />}
       </CardContent>
     </Card>
+  );
+}
+
+/** Where the folder copy of the export is, or a button to make one. */
+function SavedCopyRow({ saved, folder, copying, onCopy }: {
+  saved: Project["outputs"]["saved"]; folder: string; copying: boolean; onCopy: () => void;
+}) {
+  const bridge = desktopApi();
+  if (saved?.path) {
+    return (
+      <div className="flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-xs">
+        <FolderOpen className="size-3.5 shrink-0 text-primary" />
+        <span className="min-w-0 flex-1 break-all text-muted-foreground" title={saved.path}>Đã chép vào {saved.path}</span>
+        {bridge && (
+          <button type="button" className="shrink-0 font-medium text-primary hover:underline" onClick={() => bridge.reveal(saved.path!)}>
+            Mở thư mục
+          </button>
+        )}
+      </div>
+    );
+  }
+  if (!folder) return saved?.error ? <ErrorBox message={saved.error} /> : null;
+  return (
+    <>
+      {saved?.error && <ErrorBox message={saved.error} />}
+      <Button variant="outline" disabled={copying} onClick={onCopy} title={folder}>
+        {copying ? <Loader2 className="animate-spin" /> : <FolderOpen />} Chép vào thư mục đã chọn
+      </Button>
+    </>
   );
 }
 

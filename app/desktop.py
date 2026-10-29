@@ -114,6 +114,19 @@ class Api:
         except Exception as e:
             return {"error": f"Không lưu được file: {e}"}
 
+    def pick_folder(self, start: str = "") -> str | None:
+        import webview
+
+        try:
+            home = str(Path.home())
+            picked = self._window.create_file_dialog(
+                webview.FileDialog.FOLDER, directory=start if start and Path(start).is_dir() else home)
+        except Exception:
+            return None
+        if not picked:
+            return None
+        return str(picked[0] if isinstance(picked, (list, tuple)) else picked)
+
     def reveal(self, path: str) -> None:
         import subprocess
 
