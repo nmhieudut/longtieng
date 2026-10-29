@@ -2,7 +2,7 @@
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules, copy_metadata
 
 ROOT = Path(SPECPATH).parent
 IS_MAC = sys.platform == "darwin"
@@ -29,20 +29,25 @@ for f in bin_dir.rglob("*"):
     if f.is_file():
         binaries.append((str(f), str(Path("bin") / f.relative_to(bin_dir).parent)))
 
-pkgs = ["webview", "opencc", "certifi", "edge_tts", "gtts", "yt_dlp"]
+# offline voices (VieNeu, app/vieneu_tts.py): onnxruntime + tokenizers + its own phonemizer, no torch.
+# Only the core package: its demo (gradio) and cloning (librosa) parts are left out on purpose.
+pkgs = ["webview", "opencc", "certifi", "edge_tts", "gtts", "yt_dlp", "onnxruntime", "tokenizers",
+        "sea_g2p", "vieneu_utils"]
+hiddenimports += collect_submodules("vieneu")
+datas += collect_data_files("vieneu") + copy_metadata("vieneu")  # metadata carries the Apache-2.0 license text
 if IS_MAC:
     pkgs += ["mlx", "mlx_whisper", "Vision"]
 else:
-    pkgs += ["faster_whisper", "ctranslate2", "rapidocr_onnxruntime", "onnxruntime", "av", "tokenizers"]
+    pkgs += ["faster_whisper", "ctranslate2", "rapidocr_onnxruntime", "av"]
 for pkg in pkgs:
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
     hiddenimports += h
 
-excludes = ["torch", "torchaudio", "demucs", "tkinter", "matplotlib", "IPython", "pytest"]
+excludes = ["torch", "torchaudio", "demucs", "tkinter", "matplotlib", "IPython", "pytest", "gradio", "gradio_client", "librosa"]
 if IS_MAC:  # the Windows-only engines are installed for testing; keep them out of the Mac app
-    excludes += ["faster_whisper", "ctranslate2", "rapidocr_onnxruntime", "onnxruntime", "cv2", "av"]
+    excludes += ["faster_whisper", "ctranslate2", "rapidocr_onnxruntime", "cv2", "av"]
 
 a = Analysis(
     [str(ROOT / "packaging" / "launcher.py")],

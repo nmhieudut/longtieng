@@ -5,7 +5,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 
-from . import cancel, dub, ocr, outdir, render, store, stt, translate
+from . import cancel, dub, ocr, outdir, render, store, stt, translate, vieneu_tts
 from .cancel import Cancelled
 from .config import MAX_DURATION_MIN
 from .media import MediaError, download_url, extract_audio_16k, probe
@@ -231,8 +231,16 @@ def synth_missing(pid: str, on_progress=None) -> None:
         raise
 
 
+def _ensure_voice_model(pid: str, voice: str) -> None:
+    if voice.startswith("vieneu:") and not vieneu_tts.model_ready():
+        msg = f"Lần đầu dùng giọng VieNeu: đang tải model (~{vieneu_tts.SIZE_MB}MB), chỉ tải một lần…"
+        step(pid, "model", None, msg)
+        vieneu_tts.ensure_model(lambda f: step(pid, "model", f, msg))
+
+
 def _render(pid: str, preview_start: float | None):
     d = store.pdir(pid)
+    _ensure_voice_model(pid, store.load(pid)["settings"]["voice"])
     step(pid, "dubbing", 0, "Đang tạo giọng lồng tiếng…")
     synth_missing(pid, lambda x: step(pid, "dubbing", x, "Đang tạo giọng lồng tiếng…"))
 

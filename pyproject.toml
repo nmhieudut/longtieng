@@ -24,6 +24,7 @@ dependencies = [
     "python-multipart>=0.0.32",
     "soundfile>=0.14.0",
     "uvicorn[standard]>=0.54.0",
+    "vieneu==3.8.3",  # offline Vietnamese voices; pinned because app/vieneu_tts.py patches a private hook
 ]
 
 [project.optional-dependencies]
@@ -35,3 +36,11 @@ demucs = [
 build = ["pyinstaller>=6.10"]
 # lets the Windows code paths (faster-whisper, RapidOCR) be tested on a Mac
 crossplat = ["faster-whisper>=1.1", "rapidocr-onnxruntime>=1.4"]
+
+[tool.uv]
+# vieneu lists gradio and librosa as hard requirements, but they are only used by its own web demo and by
+# voice cloning. We use the preset voices only, so keep them (and their huge dependency trees) out.
+override-dependencies = [
+    "gradio ; sys_platform == 'never'",
+    "librosa ; sys_platform == 'never'",
+]

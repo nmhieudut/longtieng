@@ -53,6 +53,9 @@ def run() -> int:
         _step("ffmpeg có libass", lambda: _check_ffmpeg(config))
         _step("yt-dlp", lambda: _check_ytdlp(config))
         _step("OCR sẵn sàng", lambda: _check_ocr(ocr))
+        # the model is large: keep it between runs on this machine (CI downloads it once per build)
+        os.environ.setdefault("LONGTIENG_VIENEU_DIR", str(Path(tempfile.gettempdir()) / "longtieng-selftest-vieneu"))
+        _step("giọng VieNeu (offline)", _check_vieneu)
         _step("webview import", lambda: __import__("webview") and None)
         _step(".NET cho cửa sổ (pythonnet)", _check_dotnet)
         clip = _step("tạo video thử", lambda: _make_clip(config, home))
@@ -112,6 +115,23 @@ def _check_ocr(ocr):
     if ocr._engine() == "rapid":  # load the models once: catches missing model/config files
         from rapidocr_onnxruntime import RapidOCR
         RapidOCR()(np.zeros((64, 64, 3), np.uint8))
+
+
+def _check_vieneu():
+    """Offline voices: download the model, read one line. The only check the packaged bundle gets."""
+    import soundfile as sf
+
+    from app import vieneu_tts
+
+    if not vieneu_tts.available():
+        raise RuntimeError("VieNeu không có trong bản này")
+    vieneu_tts.ensure_model()
+    out = Path(tempfile.mkdtemp(prefix="vieneu-")) / "t.wav"
+    vieneu_tts.synth_wav("Xin chào các bạn, đây là giọng đọc thử.", "truc_ly", out)
+    info = sf.info(str(out))
+    if info.duration < 1.0:
+        raise RuntimeError(f"giọng quá ngắn ({info.duration:.1f}s)")
+    return f"{info.duration:.1f}s âm thanh"
 
 
 def _check_ytdlp(config):

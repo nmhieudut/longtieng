@@ -78,12 +78,12 @@ def _synth_openai(text: str, name: str, rate: float, out: Path) -> None:
 _CACHE = DATA_DIR.parent / "tts_cache"
 
 
-def _cached(engine: str, voice: str, text: str, make) -> Path:
+def _cached(engine: str, voice: str, text: str, make, ext: str = ".mp3") -> Path:
     key = hashlib.sha1(f"{voice}|{text}".encode()).hexdigest()
-    p = _CACHE / engine / f"{key}.mp3"
+    p = _CACHE / engine / f"{key}{ext}"
     if not p.exists():
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(f".{threading.get_ident()}.tmp")
+        tmp = p.with_name(f"{p.stem}.{threading.get_ident()}{ext}")  # keeps the real extension
         make(tmp)
         tmp.replace(p)
     return p
@@ -104,6 +104,22 @@ def _tempo(src: Path, rate: float, out: Path) -> None:
         raise RuntimeError("ffmpeg atempo lỗi: " + res.stderr[-300:])
 
 
+def _encode(src: Path, rate: float, out: Path) -> None:
+    """Any audio file -> `out` (mp3), sped up by `rate` when it isn't 1.0."""
+    filters, r = [], rate
+    if abs(rate - 1.0) >= 0.005:
+        while r > 2.0:
+            filters.append("atempo=2.0")
+            r /= 2.0
+        filters.append(f"atempo={r:.4f}")
+    cmd = [FFMPEG, "-y", "-v", "error", "-i", str(src)]
+    if filters:
+        cmd += ["-filter:a", ",".join(filters)]
+    res = cancel.run(cmd + ["-ac", "1", "-c:a", "libmp3lame", "-q:a", "2", str(out)], timeout=60)
+    if res.returncode != 0:
+        raise RuntimeError("ffmpeg lỗi: " + res.stderr[-300:])
+
+
 def _google_raw(text: str, out: Path) -> None:
     from gtts import gTTS
 
@@ -111,6 +127,13 @@ def _google_raw(text: str, out: Path) -> None:
 
 
 def _synth(text: str, voice: str, rate: float, out: Path) -> None:
+    if voice.startswith("vieneu:"):
+        # no speed setting: read once at 1.0x (cached), then change the tempo with ffmpeg
+        from . import vieneu_tts
+
+        vid = voice.split(":", 1)[1]
+        base = _cached("vieneu", voice, text, lambda p: vieneu_tts.synth_wav(text, vid, p), ext=".wav")
+        return _encode(base, rate, out)
     if voice.startswith("google:"):
         engine, make = "google", _google_raw
         last = None

@@ -98,6 +98,7 @@ export type AppSettings = {
   data_dir: string;
   output_dir: string;
   output_suggestions: { label: string; path: string }[];
+  vieneu: { available: boolean; size_mb: number; ready: boolean; running: boolean; progress: number | null; error: string | null };
   version: string;
 };
 
@@ -143,6 +144,7 @@ export const api = {
   appSettings: () => req<AppSettings>("/api/app-settings"),
   saveAppSettings: (patch: { openai_key?: string; output_dir?: string }) =>
     req<AppSettings>("/api/app-settings", { method: "PUT", body: patch }),
+  vieneuDownload: () => req<AppSettings["vieneu"]>("/api/vieneu/download", { method: "POST" }),
   updateState: (force = false) => req<UpdateState>(`/api/update${force ? "?force=1" : ""}`),
   updateApply: () => req<UpdateState>("/api/update/apply", { method: "POST" }),
   list: () => req<ProjectSummary[]>("/api/projects"),

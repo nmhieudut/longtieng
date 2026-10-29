@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, ExternalLink, FolderOpen, KeyRound, Loader2, Settings } from "lucide-react";
+import { CheckCircle2, Download, ExternalLink, FolderOpen, KeyRound, Loader2, Mic, Settings } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -39,6 +39,23 @@ export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
   useEffect(() => {
     if (open) api.appSettings().then((i) => { setInfo(i); setFolder(i.output_dir); }).catch((e) => toast.error(e.message));
   }, [open]);
+
+  // while the voice model downloads, ask for its progress every second
+  const dl = info?.vieneu;
+  useEffect(() => {
+    if (!open || !dl?.running) return;
+    const t = setInterval(() => { api.appSettings().then(setInfo).catch(() => {}); }, 1000);
+    return () => clearInterval(t);
+  }, [open, dl?.running]);
+
+  async function downloadVoices() {
+    try {
+      await api.vieneuDownload();
+      setInfo(await api.appSettings());
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
 
   async function saveFolder(value: string) {
     setSavingFolder(true);
@@ -152,6 +169,34 @@ export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
               disabled={savingFolder} onClick={() => saveFolder("")}>Tắt chép tự động</button>
           )}
         </div>
+
+        {dl?.available && (
+          <div className="grid gap-2 border-t pt-4">
+            <Label className="flex items-center gap-1.5"><Mic className="size-4" /> Giọng VieNeu (chạy offline)</Label>
+            {dl.ready ? (
+              <p className="flex items-center gap-1.5 text-sm text-ok">
+                <CheckCircle2 className="size-4" /> Đã tải. Chọn nhóm “VieNeu” trong danh sách giọng đọc.
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  25 giọng tiếng Việt Bắc, Trung, Nam chạy ngay trên máy, không cần mạng hay key, miễn phí.
+                  Cần tải model một lần (~{dl.size_mb}MB). Nếu không bấm tải, app sẽ tự tải khi bạn xuất video với giọng VieNeu.
+                </p>
+                <div className="flex items-center gap-3">
+                  <Button type="button" variant="outline" onClick={downloadVoices} disabled={dl.running}>
+                    {dl.running ? <Loader2 className="animate-spin" /> : <Download />}
+                    {dl.running ? `Đang tải${dl.progress != null ? ` ${Math.round(dl.progress * 100)}%` : "…"}` : "Tải model giọng"}
+                  </Button>
+                  {dl.error && <span className="text-xs text-destructive">{dl.error}</span>}
+                </div>
+              </>
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              Dùng VieNeu-TTS (Apache-2.0, pnnbao97/VieNeu-TTS). Âm thanh tạo ra được dùng cho video đăng công khai.
+            </p>
+          </div>
+        )}
 
         {info && (
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-t pt-4 text-xs">

@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from . import dub, jobs, logos, media, music, ocr, outdir, publish, render, store, stt, translate, update
+from . import dub, jobs, logos, media, music, ocr, outdir, publish, vieneu_tts, render, store, stt, translate, update
 from .frame import ASPECTS
 from .media import MediaError
 from .config import (
@@ -173,8 +173,16 @@ def app_settings():
         "data_dir": str(USER_DIR),
         "output_dir": str(outdir.current() or ""),
         "output_suggestions": outdir.suggestions(),
+        "vieneu": {"available": vieneu_tts.available(), "size_mb": vieneu_tts.SIZE_MB, **vieneu_tts.download_state()},
         "version": APP_VERSION,
     }
+
+
+@app.post("/api/vieneu/download")
+def vieneu_download():
+    if not vieneu_tts.available():
+        raise HTTPException(400, "Bản này không có giọng VieNeu.")
+    return {**vieneu_tts.start_download()}
 
 
 @app.get("/api/update")

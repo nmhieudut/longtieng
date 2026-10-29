@@ -194,6 +194,12 @@ def _voices() -> dict[str, dict]:
     for name, g in [("coral", "nữ"), ("nova", "nữ"), ("shimmer", "nữ"), ("sage", "nữ"),
                     ("ash", "nam"), ("onyx", "nam"), ("echo", "nam"), ("verse", "nam")]:
         add(f"openai:{name}", name.capitalize(), "OpenAI (cần API key, ~0,015$/phút)", g, "Biểu cảm hơn, đọc chậm hơn")
+    from . import vieneu_tts  # offline voices: only listed when this build has the package
+
+    if vieneu_tts.available():
+        for x in vieneu_tts.presets():
+            add(f"vieneu:{x['id']}", x["name"], "VieNeu (offline, miễn phí)", x["gender"],
+                f"Giọng {x['accent']} · {x['style']} · chạy trên máy, tải model ~{vieneu_tts.SIZE_MB}MB lần đầu")
     return v
 
 
