@@ -109,6 +109,7 @@ export function UpdateButton() {
             <p className="flex items-center gap-2 text-sm"><Loader2 className="size-4 animate-spin" />
               {u.stage === "installing" ? "Đang cài…" : "Đang khởi động lại app…"}</p>
           )}
+          {u.last_failed && u.stage !== "error" && <p className="text-sm text-destructive">{u.last_failed}</p>}
           {u.stage === "error" && <p className="text-sm text-destructive">{u.error}</p>}
           {(u.stage === "available" || u.stage === "error") && (
             <Button onClick={install}>

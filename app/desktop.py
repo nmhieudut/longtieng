@@ -205,6 +205,13 @@ def _run_ytdlp(args: list[str]) -> None:
     sys.exit(yt_dlp.main(args))
 
 
+def _int_arg(flag: str) -> int | None:
+    try:
+        return int(sys.argv[sys.argv.index(flag) + 1])
+    except (ValueError, IndexError):
+        return None
+
+
 def main() -> None:
     multiprocessing.freeze_support()
     if sys.argv[1:2] == ["--yt-dlp"]:
@@ -213,6 +220,16 @@ def main() -> None:
         _reattach_stdio()
         from app.selftest import run
         sys.exit(run())
+    if "--finish-update" in sys.argv:  # Windows full update: this exe is the new one, see app/update.py
+        _reattach_stdio()
+        from app import update
+        from app.config import USER_DIR
+        (USER_DIR / "updates" / "booting").unlink(missing_ok=True)  # this run starts no server to clear it
+        i = sys.argv.index("--finish-update")
+        sys.exit(update.finish_update(Path(sys.argv[i + 1]), _int_arg("--wait-pid")))
+    if _int_arg("--wait-pid"):  # restarted by the updater: let the old process finish exiting first
+        from app import update
+        update.wait_pid(_int_arg("--wait-pid"))
 
     from app.config import FROZEN, USER_DIR
 

@@ -7,7 +7,10 @@ Each release publishes latest.json:
 
 Same SHELL_VERSION as the running app -> light update (unzip the patch into updates/current).
 Otherwise -> full update (download the app, swap it in after this process exits).
-Either way the app restarts through a small script that waits for this process to end.
+Mac restarts through a small shell script that waits for this process to end. Windows has no helper
+script (a hidden PowerShell script gets blocked or killed too easily): a full update starts the *new*
+exe with --finish-update, which waits for us to exit, copies itself over the install folder (logging each
+step) and starts the app; a light update just starts our own exe again. See finish_update().
 """
 
 import hashlib
@@ -48,6 +51,7 @@ def _ver(v: str) -> tuple:
 
 
 def state() -> dict:
+    _verify_last_attempt()
     with _lock:
         s = dict(_state)
     s.update(current=APP_VERSION, shell=SHELL_VERSION, enabled=enabled())
@@ -99,24 +103,208 @@ def _apply() -> None:
     try:
         asset = latest["patch"] if kind == "patch" else latest["mac" if IS_MAC else "windows"]
         UPDATES.mkdir(parents=True, exist_ok=True)
+        if kind == "full":
+            _check_install_location()
         zpath = UPDATES / ("patch.zip" if kind == "patch" else "full.zip")
         _download(asset, zpath)
         _set(stage="installing", progress=None)
+        _log(f"cập nhật {APP_VERSION} -> {latest['version']} ({kind}), app ở {_install_location()}")
         if kind == "patch":
             _install_patch(zpath, latest["version"])
-            script = _restart_script(None)
+            new_app = None
         else:
             new_app = _unpack_full(zpath)
-            script = _restart_script(new_app)
         _set(stage="restarting")
-        _launch(script)
+        # remembered across the restart: if the app comes back on the old version, say so (see _verify_last_attempt)
+        (UPDATES / "attempt.json").write_text(json.dumps({"to": latest["version"], "from": APP_VERSION, "at": time.time()}))
+        if IS_WIN:
+            if new_app:  # the new exe copies itself over the install folder after we exit
+                _spawn(new_app / "Longtieng.exe", "--finish-update", str(_install_location()), "--wait-pid", str(os.getpid()))
+            else:
+                _spawn(sys.executable, "--wait-pid", str(os.getpid()))
+            _log("đã chạy tiến trình tiếp theo, đóng app này")
+        else:
+            _launch(_restart_script(new_app))
         time.sleep(0.5)
         if request_quit:
             request_quit()
-        else:
+        threading.Timer(10, os._exit, [0]).start()  # a stuck window must not block the swap
+        if not request_quit:
             os._exit(0)
     except Exception as e:
+        _log(f"LỖI khi cập nhật: {type(e).__name__}: {e}")
         _set(stage="error", progress=None, error=f"Cập nhật lỗi: {e}")
+
+
+def _log(msg: str) -> None:
+    """One line in logs/update.log: what the updater did (the only trace when a restart goes wrong)."""
+    try:
+        f = USER_DIR / "logs" / "update.log"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        with open(f, "a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+    except OSError:
+        pass
+
+
+def _can_write(folder: Path) -> bool:
+    """os.access ignores Windows permissions, so try for real."""
+    try:
+        t = folder / f".lt-{os.getpid()}.tmp"
+        t.write_bytes(b"")
+        t.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def _check_install_location() -> None:
+    """A full update has to replace the app where it is. Refuse early, with a reason, where that can't work;
+    otherwise the old app starts again and the update "never goes away"."""
+    target = _install_location()
+    if IS_MAC and ("/AppTranslocation/" in str(target) or not os.access(target.parent, os.W_OK)):
+        raise RuntimeError(
+            "App đang chạy ở chỗ không thay thế được (trong ổ cài đặt .dmg hoặc thư mục tạm của macOS). "
+            "Kéo “Lồng tiếng” vào thư mục Applications, mở từ đó rồi cập nhật lại. "
+            "Nếu macOS chặn mở, chạy: xattr -cr \"/Applications/Lồng tiếng.app\"")
+    if IS_WIN and ("\\Temp\\" in str(target) or ".zip" in str(target).lower() or not _can_write(target)):
+        raise RuntimeError(
+            f"App đang chạy ở {target}, nơi không cập nhật được (trong file zip, thư mục tạm hoặc không có quyền ghi). "
+            "Giải nén file zip ra một thư mục riêng (ví dụ D:\\Longtieng), mở Longtieng.exe từ đó rồi cập nhật lại.")
+    free = shutil.disk_usage(UPDATES.parent).free
+    if free < 3 * 1024**3:
+        raise RuntimeError(f"Ổ đĩa chỉ còn {free / 1024**3:.1f}GB trống, cần khoảng 3GB để cập nhật. Dọn bớt rồi thử lại.")
+
+
+def _spawn(exe, *args: str) -> None:
+    """Start a program that outlives this process (Windows)."""
+    flags = (getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+             | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    subprocess.Popen([str(exe), *args], creationflags=flags, close_fds=True, cwd=str(Path(exe).parent),
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def wait_pid(pid: int, timeout: float = 30) -> bool:
+    """Wait until process `pid` is gone (the app that started us). False if it is still there."""
+    import psutil
+
+    end = time.time() + timeout
+    while psutil.pid_exists(pid) and time.time() < end:
+        time.sleep(0.25)
+    return not psutil.pid_exists(pid)
+
+
+def finish_update(install: Path, pid: int | None) -> int:
+    """Windows full update, run by the NEW exe (from updates/full): copy this app over `install`, start it."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    staged = Path(sys.executable).resolve().parent
+    relaunch = not os.getenv("LONGTIENG_FINISH_NO_RELAUNCH")  # the CI test copies but does not start the app
+    _log(f"finish-update: {staged} -> {install} (chờ pid {pid})")
+    try:
+        if pid and not wait_pid(pid):
+            _log("app cũ vẫn chạy sau 30 giây, vẫn tiếp tục")
+        from .desktop import _SingleInstance
+
+        lock = None
+        for _ in range(60):  # nobody may start the old exe while its files are being replaced
+            lock = _SingleInstance(USER_DIR / ".lock")
+            if lock.ok:
+                break
+            time.sleep(0.5)
+        install.mkdir(parents=True, exist_ok=True)
+        files = [f for f in staged.rglob("*") if f.is_file()]
+        exe = [f for f in files if f.parent == staged and f.name.lower() == "longtieng.exe"]
+        rest = [f for f in files if f not in exe]
+
+        def copy_one(src: Path) -> None:
+            dest = install / src.relative_to(staged)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            last = None
+            for _ in range(8):  # antivirus may hold a fresh file for a moment
+                try:
+                    shutil.copy2(src, dest)
+                    return
+                except OSError as e:
+                    last = e
+                    time.sleep(1)
+            raise RuntimeError(f"không chép được {dest}: {last}")
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(copy_one, rest))
+        for f in exe:
+            copy_one(f)
+        # mirror: drop files of the old version that the new one no longer has (only in our own folder)
+        if (install / "_internal").is_dir() and install.name.lower().startswith("longtieng"):
+            keep = {f.relative_to(staged) for f in files}
+            for f in [p for p in install.rglob("*") if p.is_file()]:
+                if f.relative_to(install) not in keep and not f.name.startswith(".lt-"):
+                    f.unlink(missing_ok=True)
+        if not (install / "Longtieng.exe").is_file() or not list((install / "_internal").glob("python3*.dll")):
+            raise RuntimeError("sau khi chép vẫn thiếu Longtieng.exe hoặc python3*.dll")
+        _log(f"chép xong {len(files)} file, copy ok")
+        if relaunch:
+            if lock and lock.ok:
+                lock.f.close()
+            _spawn(install / "Longtieng.exe", "--wait-pid", str(os.getpid()))
+        return 0
+    except Exception as e:
+        _log(f"LỖI khi chép: {type(e).__name__}: {e}")
+        try:
+            UPDATES.mkdir(parents=True, exist_ok=True)
+            (UPDATES / "finish_error.json").write_text(json.dumps({"error": f"{type(e).__name__}: {e}", "install": str(install),
+                                                                  "staged": str(staged)}))
+        except OSError:
+            pass
+        if relaunch:  # still give the user a working app: run the new one from where it was unpacked
+            _spawn(sys.executable, "--wait-pid", str(os.getpid()))
+        return 1
+
+
+def _cleanup_staged() -> None:
+    """The unpacked update is no longer needed once the app runs from the install folder."""
+    full = UPDATES / "full"
+    try:
+        if full.exists() and not Path(sys.executable).resolve().is_relative_to(full.resolve()):
+            shutil.rmtree(full, ignore_errors=True)
+            (UPDATES / "full.zip").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+_last_checked = False
+
+
+def _verify_last_attempt() -> str | None:
+    """After a restart: did the update we started actually take? Returns a message if it did not."""
+    global _last_checked
+    if _last_checked:
+        return _state.get("last_failed")
+    _last_checked = True
+    fe = UPDATES / "finish_error.json"
+    if fe.exists():
+        try:
+            e = json.loads(fe.read_text())
+            msg = (f"Không chép được bản mới vào {e.get('install')} ({e.get('error')}). App đang chạy bản mới từ "
+                   f"{e.get('staged')}. Đóng mọi cửa sổ Lồng tiếng và cập nhật lại, hoặc cài lại từ file zip.")
+            fe.unlink(missing_ok=True)
+            _set(last_failed=msg)
+            return msg
+        except (OSError, ValueError):
+            pass
+    f = UPDATES / "attempt.json"
+    try:
+        a = json.loads(f.read_text())
+    except (OSError, ValueError):
+        return None
+    f.unlink(missing_ok=True)
+    if _ver(APP_VERSION) < _ver(a.get("to", "0")):
+        log = USER_DIR / "logs" / "update.log"
+        msg = (f"Lần cập nhật lên {a['to']} trước đó chưa áp dụng được, app vẫn là bản {APP_VERSION}. "
+               f"Chi tiết ở {log}. Có thể tải bản mới từ trang releases trên GitHub và cài lại.")
+        _set(last_failed=msg)
+        return msg
+    return None
 
 
 def _download(asset: dict, dest: Path) -> None:
@@ -179,46 +367,33 @@ def _install_location() -> Path:
 
 
 def _restart_script(new_app: Path | None) -> Path:
-    """Script that waits for this process to exit, swaps in the new app (full update) and relaunches."""
+    """Mac: script that waits for this process to exit, swaps in the new app (full update) and relaunches."""
     pid = os.getpid()
     target = _install_location()
-    if IS_WIN:
-        lines = [f"Wait-Process -Id {pid} -ErrorAction SilentlyContinue", "Start-Sleep -Milliseconds 500"]
-        if new_app:
-            # /MIR only on our own folder (has _internal); never mirror over e.g. Downloads
-            mode = "/MIR" if (target / "_internal").is_dir() and target.name.lower().startswith("longtieng") else "/E"
-            log = UPDATES.parent / "logs" / "update.log"
-            log.parent.mkdir(parents=True, exist_ok=True)
-            lines.append(f'robocopy "{new_app}" "{target}" {mode} /R:5 /W:1 /NFL /NDL /NJH /NJS /NP | Out-File -LiteralPath "{log}" -Encoding utf8')
-            lines.append(f'"robocopy exit code: $LASTEXITCODE (0-7 = ok, 8+ = failed); target: {target}" | Out-File -Append -LiteralPath "{log}" -Encoding utf8')
-            lines.append(f'Remove-Item -Recurse -Force "{new_app.parent}" -ErrorAction SilentlyContinue')
-        lines.append(f'Start-Process -FilePath "{target / "Longtieng.exe"}"')
-        script = UPDATES / "restart.ps1"
-        script.write_text("\r\n".join(lines), encoding="utf-8-sig")
-    else:
-        q = lambda p: "'" + str(p).replace("'", "'\\''") + "'"  # noqa: E731
-        lines = ["#!/bin/sh", f"while kill -0 {pid} 2>/dev/null; do sleep 0.3; done", "sleep 0.5"]
-        if new_app:
-            old = UPDATES / "old.app"
-            lines += [f"rm -rf {q(old)}", f"mv {q(target)} {q(old)} && mv {q(new_app)} {q(target)} || mv {q(old)} {q(target)}",
-                      f"rm -rf {q(old)} {q(new_app.parent)}"]
-        lines.append(f"open -n {q(target)}" if IS_MAC else q(sys.executable) + " &")
-        script = UPDATES / "restart.sh"
-        script.write_text("\n".join(lines) + "\n")
-        script.chmod(0o755)
+    q = lambda p: "'" + str(p).replace("'", "'\\''") + "'"  # noqa: E731
+    log = USER_DIR / "logs" / "update.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["#!/bin/sh", f"exec >> {q(log)} 2>&1", 'echo "== $(date) cập nhật"',
+             f"while kill -0 {pid} 2>/dev/null; do sleep 0.3; done", "sleep 0.5"]
+    if new_app:
+        old = UPDATES / "old.app"
+        lines += [f"rm -rf {q(old)}",
+                  f"mv {q(target)} {q(old)} && mv {q(new_app)} {q(target)} && echo \"đã thay app: $?\" "
+                  f"|| {{ echo \"thay app LỖI, trả lại bản cũ\"; mv {q(old)} {q(target)}; }}",
+                  f"rm -rf {q(old)} {q(new_app.parent)}"]
+    lines.append(f"open -n {q(target)}" if IS_MAC else q(sys.executable) + " &")
+    script = UPDATES / "restart.sh"
+    script.write_text("\n".join(lines) + "\n")
+    script.chmod(0o755)
     return script
 
 
 def _launch(script: Path) -> None:
-    if IS_WIN:
-        flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-        subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-                          "-File", str(script)], creationflags=flags, close_fds=True)
-    else:
-        subprocess.Popen(["/bin/sh", str(script)], start_new_session=True, close_fds=True,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen(["/bin/sh", str(script)], start_new_session=True, close_fds=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def check_in_background() -> None:
     if enabled():
+        _cleanup_staged()
         threading.Thread(target=check, daemon=True).start()

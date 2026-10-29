@@ -110,6 +110,7 @@ export type UpdateState = {
   latest: { version: string; notes?: string; patch?: { size?: number }; mac?: { size?: number }; windows?: { size?: number } } | null;
   current: string;
   enabled: boolean;
+  last_failed?: string;
 };
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };

@@ -34,6 +34,27 @@ jobs:
           PYTHONIOENCODING: utf-8
           PYTHONUTF8: "1"
         run: ./packaging/build_windows.ps1
+      # The in-app Windows update copies the new app over the old folder (app/update.py finish_update).
+      # Run exactly that on the built app, then start the copy: nobody has a Windows machine to try it on.
+      - name: Test the updater's copy step
+        shell: pwsh
+        run: |
+          $old = Join-Path $env:RUNNER_TEMP "old-install\Longtieng"
+          New-Item -ItemType Directory "$old\_internal" -Force | Out-Null
+          Set-Content "$old\Longtieng.exe" "old"
+          Set-Content "$old\_internal\stale.dll" "old"
+          $env:LONGTIENG_HOME = Join-Path $env:RUNNER_TEMP "lt-home"
+          $env:LONGTIENG_FINISH_NO_RELAUNCH = "1"
+          $p = Start-Process dist/Longtieng/Longtieng.exe -ArgumentList "--finish-update", "`"$old`"", "--wait-pid", "999999" -Wait -PassThru -NoNewWindow
+          Get-Content "$env:LONGTIENG_HOME\logs\update.log" -ErrorAction SilentlyContinue | Out-Host
+          if ($p.ExitCode -ne 0) { throw "finish-update exited with $($p.ExitCode)" }
+          if ((Get-Item "$old\Longtieng.exe").Length -ne (Get-Item dist/Longtieng/Longtieng.exe).Length) { throw "Longtieng.exe was not replaced" }
+          if (Test-Path "$old\_internal\stale.dll") { throw "old files were not removed" }
+          if (-not (Get-ChildItem "$old\_internal" -Filter "python3*.dll")) { throw "python dll missing after copy" }
+          # the copy must run on its own
+          $v = Start-Process "$old\Longtieng.exe" -ArgumentList "--yt-dlp", "--version" -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$env:RUNNER_TEMP\ytdlp.txt"
+          Get-Content "$env:RUNNER_TEMP\ytdlp.txt" | Out-Host
+          if ($v.ExitCode -ne 0) { throw "the copied app does not start ($($v.ExitCode))" }
       - name: Light-update patch
         shell: pwsh
         run: uv run python packaging/make_patch.py --zip "dist/Longtieng-$((Get-Content packaging/VERSION).Trim())-patch.zip"

@@ -29,6 +29,10 @@ def probe(path: Path) -> dict:
         r = run([FFPROBE, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
                 timeout=60)
     except MediaError as e:
+        if "Library not loaded" in str(e) or "dyld" in str(e):  # the tool itself cannot start, not a bad file
+            raise MediaError("Bộ xử lý video (ffmpeg) trong app không chạy được trên máy này, nên chưa đọc được video. "
+                             "Hãy cập nhật app lên bản mới nhất (bấm “Có bản mới”) hoặc tải lại app từ trang releases.\n"
+                             f"(Chi tiết: {str(e).strip().splitlines()[-1][:200]})")
         detail = str(e).strip().splitlines()[-1].split(": ")[-1]
         raise MediaError("Không đọc được file video: file có thể bị hỏng hoặc tải lên chưa xong. "
                          f"Thử tải lại file, hoặc lưu lại thành .mp4 rồi upload.\n(Chi tiết: {detail})")
