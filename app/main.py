@@ -1,6 +1,7 @@
 """FastAPI server: JSON API + static UI. Run with `uv run python -m app`."""
 
 import json
+import shutil
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -360,6 +361,9 @@ def upload(file: UploadFile = File(...), settings: str = Form("{}"), auto_render
     except json.JSONDecodeError:
         raise HTTPException(400, "Cài đặt không hợp lệ.")
     title = Path(file.filename).stem[:120] or "Video"
+    free = shutil.disk_usage(DATA_DIR).free
+    if free < 3 * 1024**3:  # the video, its audio and the exported copy all live on this disk
+        raise HTTPException(507, f"Ổ đĩa chỉ còn {free / 1024**3:.1f}GB trống, cần ít nhất 3GB. Dọn bớt rồi thử lại.")
     p = store.create(title, {"type": "upload", "file": f"source{ext}", "name": file.filename}, st, auto_render)
     dst = store.pdir(p["id"]) / f"source{ext}"
     limit = MAX_UPLOAD_MB * 1024 * 1024
@@ -371,6 +375,9 @@ def upload(file: UploadFile = File(...), settings: str = Form("{}"), auto_render
                 if size > limit:
                     raise HTTPException(413, f"File lớn hơn {MAX_UPLOAD_MB}MB.")
                 f.write(chunk)
+    except OSError as e:  # most likely the disk filled up halfway through a big file
+        store.delete(p["id"])
+        raise HTTPException(507, f"Không ghi được file ({e.strerror or e}). Kiểm tra dung lượng ổ đĩa.")
     except BaseException:
         store.delete(p["id"])
         raise

@@ -135,8 +135,8 @@ if YTDLP_COOKIES_FILE and not os.path.isabs(YTDLP_COOKIES_FILE):
 
 ALLOW_LAN = os.getenv("ALLOW_LAN", "0") == "1"
 PORT = int(os.getenv("PORT", "8000"))
-MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "500"))
-MAX_DURATION_MIN = float(os.getenv("MAX_DURATION_MIN", "15"))
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "2048"))
+MAX_DURATION_MIN = float(os.getenv("MAX_DURATION_MIN", "30"))
 
 # Subtitle font ships with the app (full Vietnamese glyphs, same look on Mac and Windows).
 # ffmpeg's filter parser chokes on "C:\\..." paths, so filters reference fonts by a path relative
