@@ -105,7 +105,7 @@ export function OverlayInspector({ o, total, disabled, onChange, onDelete }: {
   );
 
   return (
-    <div className="grid gap-3 rounded-xl border p-3 sm:grid-cols-2" aria-label="Thuộc tính chữ hoặc hình dán">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 rounded-xl border p-3 sm:grid-cols-2" aria-label="Thuộc tính chữ hoặc hình dán">
       <p className="flex items-center justify-between text-xs font-medium sm:col-span-2">
         {o.kind === "text" ? "Chữ" : "Hình dán"} · {clock(o.start)}–{clock(o.end)}
         <Button type="button" variant="ghost" size="sm" disabled={disabled} onClick={onDelete}><Trash2 /> Xoá</Button>

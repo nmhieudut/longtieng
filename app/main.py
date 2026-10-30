@@ -794,6 +794,23 @@ def add_source(pid: str, file: UploadFile = File(...)):
     return _view(store.load(pid))
 
 
+@app.post("/api/projects/{pid}/sources/{src}/retry")
+def retry_source(pid: str, src: int):
+    """Recognise and translate an added video again (it failed or was cancelled)."""
+    p = _load(pid)
+    _not_busy(pid)
+    if not any(x["id"] == src for x in timeline.extra_sources(p)):
+        raise HTTPException(404, "Không có video này trong dự án.")
+    prev = p["status"]
+    store.set_status(pid, "extracting", None, "Đang chuẩn bị video…")
+    try:
+        jobs.submit_extra(pid, src, retry=True)
+    except RuntimeError as e:
+        store.update(pid, lambda q: q.__setitem__("status", prev))
+        raise HTTPException(409, str(e))
+    return _view(store.load(pid))
+
+
 @app.delete("/api/projects/{pid}/sources/{src}")
 def delete_source(pid: str, src: int):
     """Remove an added video with its lines and its clips."""

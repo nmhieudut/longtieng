@@ -31,7 +31,7 @@ def _sub_times(segs, i, duration):
     if s.get("tts"):
         end = max(end, s["start"] + s["tts"]["secs"])
     nxt = segs[i + 1]["start"] if i + 1 < len(segs) else duration
-    return s["start"], min(end, nxt)
+    return s["start"], max(s["start"] + 0.3, min(end, nxt)) if nxt > s["start"] else end
 
 
 def write_srt(segs, duration, path: Path) -> None:

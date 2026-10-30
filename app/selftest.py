@@ -221,10 +221,12 @@ def _pipeline(clip: Path) -> str:
             # timeline: cut the middle out, repeat the opening part. The export must be exactly that long.
             D = p["media"]["duration"]
             # (the first part at 2x with a fade in, the second quieter with a fade out)
+            # a plain cut, then crossfades (they overlap by 0.4 s and 0.3 s)
             clips = [{"start": 0, "end": D * 0.4, "speed": 2, "fade_in": 0.2},
                      {"start": D * 0.7, "end": D, "volume": 0.5, "fade_out": 0.3},
-                     {"start": 0, "end": D * 0.4}]
-            expect = D * 0.4 / 2 + D * 0.3 + D * 0.4
+                     {"start": 0, "end": D * 0.4, "transition": 0.4},
+                     {"start": D * 0.1, "end": D * 0.5, "transition": 0.3}]
+            expect = D * 0.4 / 2 + D * 0.3 + D * 0.4 + D * 0.4 - 0.4 - 0.3
             r = c.put(f"/api/projects/{pid}/timeline", json={"clips": clips})
             r.raise_for_status()
             c.post(f"/api/projects/{pid}/render", json={"preview_start": None}).raise_for_status()

@@ -25,7 +25,7 @@ def slot(segs: list[dict], i: int, duration: float) -> float:
     `duration` is the main video's length; the lines of an added video (src_id > 0) end a second after their own end."""
     vid = segs[i].get("src_id", 0)
     for j in range(i + 1, len(segs)):
-        if segs[j].get("src_id", 0) == vid:
+        if segs[j].get("src_id", 0) == vid and segs[j]["start"] > segs[i]["start"]:
             return max(0.3, segs[j]["start"] - segs[i]["start"])
     end = duration if vid == 0 else segs[i]["end"] + 1.0
     return max(0.3, end - segs[i]["start"])

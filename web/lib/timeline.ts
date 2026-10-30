@@ -10,6 +10,7 @@ export type Clip = {
   volume?: number;     // 0 .. 2, the video's own sound
   fade_in?: number;    // seconds, from/to black and silence
   fade_out?: number;
+  transition?: number; // seconds this clip overlaps the one before it (a crossfade)
 };
 
 export const MIN_CLIP = 0.2;
@@ -21,36 +22,44 @@ export const spd = (c: Clip) => c.speed || 1;
 export const srcOf = (c: Clip) => c.src ?? 0;
 /** Seconds the clip lasts in the export. */
 export const len = (c: Clip) => (c.end - c.start) / spd(c);
-export const totalLen = (clips: Clip[]) => clips.reduce((t, c) => t + len(c), 0);
+/** Seconds clip i overlaps the clip before it. Never more than half of either clip (same rule as app/timeline.py). */
+export const trans = (clips: Clip[], i: number) =>
+  i === 0 ? 0 : Math.max(0, Math.min(clips[i].transition || 0, len(clips[i - 1]) / 2, len(clips[i]) / 2));
 export const full = (duration: number): Clip[] => [{ id: "full", start: 0, end: duration }];
 
 /** Just a part of the main video: nothing changed about how it plays. */
 export const isPlain = (c: Clip) =>
-  srcOf(c) === 0 && spd(c) === 1 && (c.volume ?? 1) === 1 && !(c.fade_in || 0) && !(c.fade_out || 0);
+  srcOf(c) === 0 && spd(c) === 1 && (c.volume ?? 1) === 1 && !(c.fade_in || 0) && !(c.fade_out || 0) && !(c.transition || 0);
 export const isFull = (clips: Clip[], duration: number) =>
   clips.length === 1 && clips[0].start <= 0.05 && clips[0].end >= duration - 0.05 && isPlain(clips[0]);
 
-/** Each clip with the output time at which it starts. */
+/** Each clip with the output time at which it starts (a crossfade pulls the next clip back by its length). */
 export function layout(clips: Clip[]): { clip: Clip; at: number }[] {
   let t = 0;
-  return clips.map((clip) => {
+  return clips.map((clip, i) => {
+    t -= trans(clips, i);
     const row = { clip, at: t };
     t += len(clip);
     return row;
   });
 }
 
-/** Which clip plays at output time T, and which second of its video that is. */
+/** Length of the export. */
+export const totalLen = (clips: Clip[]) => {
+  const rows = layout(clips);
+  const last = rows[rows.length - 1];
+  return last ? last.at + len(last.clip) : 0;
+};
+
+/** Which clip plays at output time T, and which second of its video that is. During a crossfade two clips are on
+ *  screen; the preview has already moved on to the later one (it does not show the blend). */
 export function locate(clips: Clip[], T: number): { idx: number; src: number } {
   const rows = layout(clips);
-  for (let i = 0; i < rows.length; i++) {
-    const { clip, at } = rows[i];
-    if (T < at + len(clip) || i === rows.length - 1) {
-      const within = Math.min(Math.max(T - at, 0), len(clip));
-      return { idx: i, src: clip.start + within * spd(clip) };
-    }
-  }
-  return { idx: 0, src: 0 };
+  let idx = 0;
+  rows.forEach((r, i) => { if (T >= r.at - 1e-9) idx = i; });
+  const { clip, at } = rows[idx] ?? { clip: clips[0], at: 0 };
+  const within = Math.min(Math.max(T - at, 0), len(clip));
+  return { idx, src: clip.start + within * spd(clip) };
 }
 
 /** Output time of second `src` of the clip's video, inside clip `idx`. */
@@ -70,7 +79,7 @@ export function splitAt(clips: Clip[], T: number): { clips: Clip[]; idx: number 
   // speed and volume stay on both halves; the fade in belongs to the first, the fade out to the second
   next.splice(idx, 1,
     { ...c, id: uid(), end: src, fade_out: 0 },
-    { ...c, id: uid(), start: src, fade_in: 0 });
+    { ...c, id: uid(), start: src, fade_in: 0, transition: 0 });
   return { clips: next, idx: idx + 1 };
 }
 
@@ -100,13 +109,14 @@ export function trimEdge(clips: Clip[], idx: number, side: "start" | "end", src:
 }
 
 /** Change how a clip plays (speed, volume, fades), keeping every fade inside half the clip. */
-export function setProps(clips: Clip[], idx: number, patch: Partial<Pick<Clip, "speed" | "volume" | "fade_in" | "fade_out">>): Clip[] {
+export function setProps(clips: Clip[], idx: number, patch: Partial<Pick<Clip, "speed" | "volume" | "fade_in" | "fade_out" | "transition">>): Clip[] {
   const next = [...clips];
   const c = { ...clips[idx], ...patch };
   if (patch.speed !== undefined) c.speed = Math.min(MAX_SPEED, Math.max(MIN_SPEED, patch.speed));
   const half = len(c) / 2;
   c.fade_in = Math.min(c.fade_in || 0, half);
   c.fade_out = Math.min(c.fade_out || 0, half);
+  if (patch.transition !== undefined) c.transition = Math.min(2, Math.max(0, patch.transition));
   next[idx] = c;
   return next;
 }
@@ -130,6 +140,21 @@ export function mapLines<T extends Timed>(clips: Clip[], segs: T[]): (T & { out0
       });
     }
   });
+  res.sort((a, b) => a.out0 - b.out0);   // a crossfade starts the next clip's lines before this clip's last ones
+  // two voices must not talk over each other where clips overlap: the line that starts later waits for the other
+  let prev: (typeof res)[number] | null = null;
+  let pushed = false;
+  for (const l of res) {
+    if (prev && l.out0 < prev.out1 - 1e-9 && (l.clipIdx !== prev.clipIdx || pushed)) {
+      const d = prev.out1 - l.out0;
+      l.out0 += d;
+      l.out1 += d;
+      pushed = true;
+    } else {
+      pushed = false;
+    }
+    prev = l;
+  }
   return res;
 }
 

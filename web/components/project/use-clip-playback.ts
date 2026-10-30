@@ -2,7 +2,7 @@
 
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
-import { type Clip, layout, len, srcOf } from "@/lib/timeline";
+import { type Clip, layout, len, srcOf, trans } from "@/lib/timeline";
 
 /** Clip for a time in the loaded video: keep the current one while the time is inside it, else the first of this
  *  video that holds it, else (the time is in a cut part) the next clip of this video that starts after it.
@@ -51,11 +51,13 @@ export function useClipPlayback(opts: {
         const i = pick(cs, v.currentTime, cur, ld);
         const c = cs[i];
         if (i !== cur) setIdx(i);
+        const next = cs[i + 1];
+        // with a crossfade the export is already on the next clip this much before this one ends
+        const cut = next ? c.end - trans(cs, i + 1) * (c.speed || 1) : c.end;
         if (v.currentTime < c.start - 0.08) {            // inside a cut part: go to the clip that follows
           v.currentTime = c.start;
           onJump(c.start);
-        } else if (v.currentTime >= c.end - 0.03) {
-          const next = cs[i + 1];
+        } else if (v.currentTime >= cut - 0.03) {
           if (!next) {
             v.pause();
             v.currentTime = c.end;
@@ -66,7 +68,7 @@ export function useClipPlayback(opts: {
             if (srcOf(next) !== ld) {                       // the next part is in another video file
               v.pause();
               onSwitch(srcOf(next), next.start, true);
-            } else if (Math.abs(next.start - c.end) > 0.05) {  // not contiguous: jump
+            } else if (trans(cs, i + 1) > 0 || Math.abs(next.start - c.end) > 0.05) {  // crossfade or not contiguous: jump
               v.currentTime = next.start;
               onJump(next.start);
             }

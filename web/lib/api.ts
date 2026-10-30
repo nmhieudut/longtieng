@@ -195,6 +195,7 @@ export const api = {
   saveTimeline: (id: string, clips: Clip[] | null) =>
     req<Project>(`${P(id)}/timeline`, { method: "PUT", body: { clips } }),
   filmstrip: (id: string, src = 0) => req<Project>(`${P(id)}/filmstrip?src=${src}`, { method: "POST" }),
+  retrySource: (id: string, src: number) => req<Project>(`${P(id)}/sources/${src}/retry`, { method: "POST" }),
   deleteSource: (id: string, src: number) => req<Project>(`${P(id)}/sources/${src}`, { method: "DELETE" }),
   rewrite: (id: string) => req<Project>(`${P(id)}/rewrite`, { method: "POST" }),
   saveDefaults: (settings: Settings) => req<{ ok: boolean }>("/api/default-settings", { method: "PUT", body: { settings } }),

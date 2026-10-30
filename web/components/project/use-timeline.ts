@@ -5,13 +5,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Project } from "@/lib/api";
 import { type Clip, full, isFull } from "@/lib/timeline";
 
+import { type EditLog, logStep, registerClear } from "./edit-log";
+
 const SAVE_AFTER_MS = 500;
 const MAX_HISTORY = 100;
 
 type Hist = { clips: Clip[]; past: Clip[][]; future: Clip[][] };
 
 /** The edit list of one project: local while you work (instant, with undo), saved to the server a moment later. */
-export function useTimeline(project: Project, apply: (p: Project) => void, onError: (m: string) => void) {
+export function useTimeline(project: Project, apply: (p: Project) => void, onError: (m: string) => void, log: EditLog) {
   const duration = project.media?.duration ?? 0;
   const serverClips: Clip[] = project.timeline?.clips?.length ? project.timeline.clips : full(duration);
 
@@ -56,8 +58,9 @@ export function useTimeline(project: Project, apply: (p: Project) => void, onErr
   const commit = useCallback((next: Clip[]) => {
     const b = box.current;
     set({ clips: next, past: [...b.past.slice(-MAX_HISTORY), b.clips], future: [] });
+    logStep(log, "clips");
     schedule();
-  }, [schedule, set]);
+  }, [schedule, set, log]);
 
   /** Change made with a slider: many small steps count as one undo step. */
   const lastTweak = useRef({ key: "", at: 0 });
@@ -68,10 +71,11 @@ export function useTimeline(project: Project, apply: (p: Project) => void, onErr
       set({ ...b, clips: next, future: [] });
     } else {
       set({ clips: next, past: [...b.past.slice(-MAX_HISTORY), b.clips], future: [] });
+      logStep(log, "clips");
     }
     lastTweak.current = { key, at: now };
     schedule();
-  }, [schedule, set]);
+  }, [schedule, set, log]);
 
   /** A change still being dragged: shown at once, but no undo step and no save until it is done. */
   const preview = useCallback((next: Clip[]) => { dragging.current = true; set({ ...box.current, clips: next }); }, [set]);
@@ -80,9 +84,11 @@ export function useTimeline(project: Project, apply: (p: Project) => void, onErr
   const settle = useCallback((before: Clip[]) => {
     dragging.current = false;
     const b = box.current;
+    if (JSON.stringify(before) === JSON.stringify(b.clips)) return;  // dragged and put back: nothing to undo
     set({ clips: b.clips, past: [...b.past.slice(-MAX_HISTORY), before], future: [] });
+    logStep(log, "clips");
     schedule();
-  }, [schedule, set]);
+  }, [schedule, set, log]);
 
   const undo = useCallback(() => {
     const b = box.current;
@@ -108,6 +114,8 @@ export function useTimeline(project: Project, apply: (p: Project) => void, onErr
     }
     while (inflight.current) await new Promise((r) => setTimeout(r, 30));
   }, [save]);
+
+  useEffect(() => registerClear(log, "clips", () => set({ ...box.current, future: [] })), [log, set]);
 
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 

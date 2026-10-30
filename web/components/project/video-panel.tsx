@@ -49,7 +49,7 @@ export function VideoPanel({ project: p, videoRef, src, view, onView, time, acti
             controls
             playsInline
             preload="metadata"
-            className="mx-auto block max-h-[44vh] w-full bg-black"
+            className="mx-auto block max-h-[46vh] w-full bg-black"
             style={live ? { filter: cssFilter(color) } : undefined}
             onTimeUpdate={(e) => onTime(e.currentTarget.currentTime)}
             onLoadedMetadata={onLoaded}

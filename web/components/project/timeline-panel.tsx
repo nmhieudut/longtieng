@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, Gauge, ImagePlus, Loader2, Plus, Redo2, Scissors, Trash2, Type, Undo2, Video, Volume2, ZoomIn } from "lucide-react";
+import { Copy, Gauge, ImagePlus, Loader2, Plus, Redo2, RotateCw, Scissors, Trash2, Type, Undo2, Video, Volume2, ZoomIn } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -9,11 +9,12 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { addSource, api, fileUrl, isActive, type MusicTrack, type Overlay, type Project, type Settings } from "@/lib/api";
-import { clock, duplicateAt, full, layout, len, mapLines, MAX_SPEED, MIN_CLIP, MIN_SPEED, moveClip, removeAt, setProps, spd, splitAt, srcOf, totalLen, trimEdge, uid } from "@/lib/timeline";
+import { type Clip, clock, duplicateAt, full, layout, len, mapLines, MAX_SPEED, MIN_CLIP, MIN_SPEED, moveClip, removeAt, setProps, spd, splitAt, srcOf, totalLen, trans, trimEdge, uid } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 
 import { MUSIC_H, MusicBar, MusicInspector } from "./music-track";
 import { OVERLAY_H, OverlayInspector, OverlayTrack } from "./overlay-editor";
+import type { EditLog } from "./edit-log";
 import type { OverlaysApi } from "./use-overlays";
 import type { TimelineApi } from "./use-timeline";
 
@@ -27,6 +28,7 @@ type Props = {
   project: Project;
   tl: TimelineApi;
   overlays: OverlaysApi;
+  editLog: EditLog;
   music: Settings["music"];
   onMusic: (patch: Partial<Settings["music"]>) => void;
   idx: number;                    // clip that is playing
@@ -55,7 +57,7 @@ function ToolBtn({ label, hint, onClick, off, disabled, children }: {
   );
 }
 
-export function TimelinePanel({ project: p, tl, overlays, music, onMusic, idx, T, playing, showPlayhead, disabled, onSeekOut, onSelectClip, onTogglePlay, onApply }: Props) {
+export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusic, idx, T, playing, showPlayhead, disabled, onSeekOut, onSelectClip, onTogglePlay, onApply }: Props) {
   const duration = p.media?.duration ?? 0;
   const { clips, commit, tweak, undo, redo } = tl;
   const rows = useMemo(() => layout(clips), [clips]);
@@ -105,6 +107,21 @@ export function TimelinePanel({ project: p, tl, overlays, music, onMusic, idx, T
   const contentW = Math.max(width - 8, total * pps);
   const lines = useMemo(() => mapLines(clips, p.segments), [clips, p.segments]);
 
+  // undo / redo go through the edit log: back and forth in the order things were done, across clips and texts
+  const doUndo = () => {
+    const k = editLog.undo.pop();
+    if (!k) return;
+    if (k === "ov") overlays.undo(); else undo();
+    editLog.redo.push(k);
+  };
+  const doRedo = () => {
+    const k = editLog.redo.pop();
+    if (!k) return;
+    if (k === "ov") overlays.redo(); else redo();
+    editLog.undo.push(k);
+  };
+  const tw = (next: Clip[], key: string) => tweak(next, key);
+
   // ---- operations
   const cut = () => {
     const r = splitAt(clips, T);
@@ -134,8 +151,7 @@ export function TimelinePanel({ project: p, tl, overlays, music, onMusic, idx, T
       id: Math.random().toString(36).slice(2, 8), kind, start: +start.toFixed(2), end: +Math.min(total, start + 3).toFixed(2),
       x: 0.5, y: kind === "text" ? 0.2 : 0.35, size: kind === "text" ? 0.07 : 0.25,
       ...(kind === "text" ? { text: "Nhập chữ ở đây", color: "#ffffff", box: false, bold: true } : { image }),
-    };
-    overlays.change([...ovItems, o], true);
+    }; overlays.change([...ovItems, o], { now: true });
     setSelOv(o.id);
   };
   const addSticker = async () => {
@@ -145,14 +161,16 @@ export function TimelinePanel({ project: p, tl, overlays, music, onMusic, idx, T
       addOverlay("image", list[0].id);
     } catch (e) { toast.error((e as Error).message); }
   };
-  const patchOverlay = (patch: Partial<Overlay>) => overlays.change(ovItems.map((o) => (o.id === selOv ? { ...o, ...patch } : o)));
-  const removeOverlay = () => { overlays.change(ovItems.filter((o) => o.id !== selOv), true); setSelOv(null); };
+  const patchOverlay = (patch: Partial<Overlay>) => {
+    overlays.change(ovItems.map((o) => (o.id === selOv ? { ...o, ...patch } : o)), { key: `p${selOv}${Object.keys(patch).join()}` });
+  };
+  const removeOverlay = () => { overlays.change(ovItems.filter((o) => o.id !== selOv), { now: true }); setSelOv(null); };
 
   const reset = () => { commit(full(duration)); setSelected(0); };
 
   // ---- keyboard (not while typing in a box). The listener is set up once and calls the latest handlers.
-  const act = useRef({ cut, del, dup, undo, redo, onTogglePlay });
-  useEffect(() => { act.current = { cut, del, dup, undo, redo, onTogglePlay }; });
+  const act = useRef({ cut, del, dup, undo: doUndo, redo: doRedo, onTogglePlay });
+  useEffect(() => { act.current = { cut, del, dup, undo: doUndo, redo: doRedo, onTogglePlay }; });
   useEffect(() => {
     if (disabled) return;
     const on = (e: KeyboardEvent) => {
@@ -231,7 +249,7 @@ export function TimelinePanel({ project: p, tl, overlays, music, onMusic, idx, T
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      if (moved && at !== i) tl.settle(before);
+      if (moved && at !== i) { tl.settle(before); }
       else tl.preview(before);
     };
     window.addEventListener("pointermove", move);
@@ -245,7 +263,7 @@ export function TimelinePanel({ project: p, tl, overlays, music, onMusic, idx, T
   if (!p.media) return <p className="p-4 text-sm text-muted-foreground">Video chưa sẵn sàng.</p>;
 
   return (
-    <div className="grid gap-3 p-4">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 p-4">
       <div className="flex flex-wrap items-center gap-2">
         <ToolBtn disabled={disabled} label="Cắt đôi tại đường chỉ" hint="S" onClick={cut}><Scissors /> Cắt đôi</ToolBtn>
         <ToolBtn disabled={disabled} label="Xoá đoạn đang chọn" hint="Delete" onClick={del} off={clips.length <= 1}><Trash2 /> Xoá</ToolBtn>
@@ -266,8 +284,8 @@ export function TimelinePanel({ project: p, tl, overlays, music, onMusic, idx, T
         <ToolBtn disabled={disabled} label="Thêm chữ tại đường chỉ" hint="chữ hiện 3 giây" onClick={() => addOverlay("text")}><Type /> Chữ</ToolBtn>
         <ToolBtn disabled={disabled} label="Thêm hình dán tại đường chỉ" hint="ảnh trong thư viện" onClick={addSticker}><ImagePlus /> Hình dán</ToolBtn>
         <span className="mx-1 h-5 w-px bg-border" />
-        <ToolBtn disabled={disabled} label="Hoàn tác" hint="Ctrl/⌘ Z" onClick={undo} off={!tl.canUndo}><Undo2 /></ToolBtn>
-        <ToolBtn disabled={disabled} label="Làm lại" hint="Ctrl/⌘ Shift Z" onClick={redo} off={!tl.canRedo}><Redo2 /></ToolBtn>
+        <ToolBtn disabled={disabled} label="Hoàn tác" hint="Ctrl/⌘ Z" onClick={doUndo} off={!tl.canUndo && !overlays.canUndo}><Undo2 /></ToolBtn>
+        <ToolBtn disabled={disabled} label="Làm lại" hint="Ctrl/⌘ Shift Z" onClick={doRedo} off={!tl.canRedo && !overlays.canRedo}><Redo2 /></ToolBtn>
         <Button type="button" variant="ghost" size="sm" disabled={disabled || !tl.edited} onClick={reset}>Về nguyên bản</Button>
         <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
           <ZoomIn className="size-4" />
@@ -288,6 +306,11 @@ export function TimelinePanel({ project: p, tl, overlays, music, onMusic, idx, T
           {extras.map((e) => (
             <span key={e.id} className="flex items-center gap-1 rounded-full border px-2 py-1">
               <Video className="size-3" /> <span className="max-w-32 truncate" title={e.name}>{e.name}</span> · {clock(e.duration)}
+              {e.has_audio && !p.segments.some((s) => (s.src_id ?? 0) === e.id) && (
+                <button type="button" disabled={disabled || isActive(p)} className="rounded p-0.5 text-fast-foreground hover:bg-accent"
+                  title="Video này chưa có lời thoại: nhận dạng và dịch lại"
+                  onClick={() => api.retrySource(p.id, e.id).then(onApply).catch((err) => toast.error((err as Error).message))}><RotateCw className="size-3" /></button>
+              )}
               <button type="button" disabled={disabled} className="rounded p-0.5 hover:bg-accent" title="Chèn vào cuối timeline"
                 onClick={() => { commit([...clips, { id: uid(), src: e.id, start: 0, end: e.duration }]); setSelected(clips.length); }}><Plus className="size-3" /></button>
               <button type="button" disabled={disabled || isActive(p)} className={cn("rounded p-0.5 hover:bg-accent", confirmDel === e.id && "bg-destructive/15 text-destructive")}
@@ -353,6 +376,9 @@ export function TimelinePanel({ project: p, tl, overlays, music, onMusic, idx, T
                         {(clip.volume ?? 1) === 0 ? <span>tắt tiếng</span> : (clip.volume ?? 1) !== 1 && <span>{Math.round((clip.volume ?? 1) * 100)}%</span>}
                       </span>
                     )}
+                    {i > 0 && trans(clips, i) > 0 && (
+                      <span className="pointer-events-none absolute inset-y-0 left-0 bg-gradient-to-r from-primary/60 to-transparent" style={{ width: trans(clips, i) * pps }} />
+                    )}
                     {!!clip.fade_in && <span className="pointer-events-none absolute inset-y-0 left-0 bg-gradient-to-r from-black/70 to-transparent" style={{ width: clip.fade_in * pps }} />}
                     {!!clip.fade_out && <span className="pointer-events-none absolute inset-y-0 right-0 bg-gradient-to-l from-black/70 to-transparent" style={{ width: clip.fade_out * pps }} />}
                     {/* edge handles */}
@@ -382,7 +408,7 @@ export function TimelinePanel({ project: p, tl, overlays, music, onMusic, idx, T
 
             {/* texts and stickers */}
             <OverlayTrack items={ovItems} pps={pps} total={total} selectedId={selOv} disabled={disabled}
-              onSelect={(id) => { setSelOv(id); setSelMusic(false); }} onChange={(next) => overlays.change(next)} onScrub={scrub} />
+              onSelect={(id) => { setSelOv(id); setSelMusic(false); }} onChange={(next) => { overlays.change(next, { key: `drag${selOv}` }); }} onScrub={scrub} />
 
             {/* background music */}
             <MusicBar music={music} tracks={tracks} total={total} pps={pps} selected={selMusic}
@@ -404,7 +430,7 @@ export function TimelinePanel({ project: p, tl, overlays, music, onMusic, idx, T
       {selectedOv && <OverlayInspector o={selectedOv} total={total} disabled={disabled} onChange={patchOverlay} onDelete={removeOverlay} />}
 
       {!selectedOv && !selMusic && clips[sel] && (
-        <div className="grid gap-3 rounded-xl border p-3 sm:grid-cols-2" aria-label="Thuộc tính đoạn đang chọn">
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 rounded-xl border p-3 sm:grid-cols-2" aria-label="Thuộc tính đoạn đang chọn">
           <p className="text-xs font-medium sm:col-span-2">
             Đoạn {sel + 1}/{clips.length} · {clock(len(clips[sel]))}
           </p>
@@ -413,11 +439,11 @@ export function TimelinePanel({ project: p, tl, overlays, music, onMusic, idx, T
               <span className="ml-auto font-mono text-foreground">{+spd(clips[sel]).toFixed(2)}×</span>
             </Label>
             <Slider min={MIN_SPEED} max={MAX_SPEED} step={0.05} disabled={disabled} value={[spd(clips[sel])]}
-              onValueChange={([v]) => tweak(setProps(clips, sel, { speed: v }), `speed${sel}`)} aria-label="Tốc độ" />
+              onValueChange={([v]) => tw(setProps(clips, sel, { speed: v }), `speed${sel}`)} aria-label="Tốc độ" />
             <div className="flex flex-wrap gap-1">
               {[0.5, 1, 1.5, 2, 4].map((v) => (
                 <button key={v} type="button" disabled={disabled}
-                  onClick={() => tweak(setProps(clips, sel, { speed: v }), `speedchip${sel}${v}`)}
+                  onClick={() => tw(setProps(clips, sel, { speed: v }), `speedchip${sel}${v}`)}
                   className={cn("rounded-full border px-2 py-0.5 text-[11px] hover:bg-accent", spd(clips[sel]) === v && "border-primary bg-primary/10 text-primary")}>
                   {v}×
                 </button>
@@ -429,7 +455,7 @@ export function TimelinePanel({ project: p, tl, overlays, music, onMusic, idx, T
               <span className="ml-auto font-mono text-foreground">{Math.round((clips[sel].volume ?? 1) * 100)}%</span>
             </Label>
             <Slider min={0} max={2} step={0.05} disabled={disabled} value={[clips[sel].volume ?? 1]}
-              onValueChange={([v]) => tweak(setProps(clips, sel, { volume: v }), `vol${sel}`)} aria-label="Âm thanh gốc" />
+              onValueChange={([v]) => tw(setProps(clips, sel, { volume: v }), `vol${sel}`)} aria-label="Âm thanh gốc" />
             <p className="text-[11px] text-muted-foreground">0% là tắt tiếng đoạn này (giọng lồng vẫn đọc). Trên 100% chỉ có khi xuất, nghe thử bị giới hạn ở 100%.</p>
           </div>
           <div className="grid gap-2">
@@ -437,14 +463,24 @@ export function TimelinePanel({ project: p, tl, overlays, music, onMusic, idx, T
               <span className="ml-auto font-mono text-foreground">{(clips[sel].fade_in ?? 0).toFixed(1)}s</span>
             </Label>
             <Slider min={0} max={2} step={0.1} disabled={disabled} value={[clips[sel].fade_in ?? 0]}
-              onValueChange={([v]) => tweak(setProps(clips, sel, { fade_in: v }), `fi${sel}`)} aria-label="Mờ dần vào" />
+              onValueChange={([v]) => tw(setProps(clips, sel, { fade_in: v }), `fi${sel}`)} aria-label="Mờ dần vào" />
+          </div>
+          <div className="grid gap-2 sm:col-span-2">
+            <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">Chuyển cảnh từ đoạn trước (pha trộn hai đoạn)
+              <span className="ml-auto font-mono text-foreground">{sel === 0 ? "—" : `${(clips[sel].transition ?? 0).toFixed(1)}s`}</span>
+            </Label>
+            <Slider min={0} max={2} step={0.1} disabled={disabled || sel === 0} value={[clips[sel].transition ?? 0]}
+              onValueChange={([v]) => tw(setProps(clips, sel, { transition: v }), `tr${sel}`)} aria-label="Chuyển cảnh" />
+            <p className="text-[11px] text-muted-foreground">
+              {sel === 0 ? "Đoạn đầu tiên không có đoạn trước." : "Hai đoạn chồng lên nhau đúng bằng thời gian này (tối đa một nửa đoạn ngắn hơn), nên video xuất ngắn đi tương ứng. Nghe thử chưa hiện hiệu ứng, bản xuất mới có."}
+            </p>
           </div>
           <div className="grid gap-2">
             <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">Mờ dần ra
               <span className="ml-auto font-mono text-foreground">{(clips[sel].fade_out ?? 0).toFixed(1)}s</span>
             </Label>
             <Slider min={0} max={2} step={0.1} disabled={disabled} value={[clips[sel].fade_out ?? 0]}
-              onValueChange={([v]) => tweak(setProps(clips, sel, { fade_out: v }), `fo${sel}`)} aria-label="Mờ dần ra" />
+              onValueChange={([v]) => tw(setProps(clips, sel, { fade_out: v }), `fo${sel}`)} aria-label="Mờ dần ra" />
           </div>
         </div>
       )}

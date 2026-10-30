@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Languages, Scissors, Send, SlidersHorizontal, WifiOff } from "lucide-react";
+import { ArrowLeft, Languages, Send, SlidersHorizontal, WifiOff } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -19,6 +19,7 @@ import { useProject } from "./use-project";
 import { PublishPanel } from "./publish-panel";
 import { TimelinePanel } from "./timeline-panel";
 import { useClipPlayback } from "./use-clip-playback";
+import { newEditLog } from "./edit-log";
 import { useOverlays } from "./use-overlays";
 import { locate, mapLines } from "@/lib/timeline";
 import { useTimeline } from "./use-timeline";
@@ -33,7 +34,7 @@ export function ProjectView({ id }: { id: string }) {
   const [view, setView] = useState<VideoView>("source");
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [tab, setTab] = useState("lines");
+  const [tab, setTab] = useState("settings");
   const [draft, setDraft] = useState<Settings | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pendingShow = useRef<"preview" | "final" | null>(null);
@@ -68,8 +69,9 @@ export function ProjectView({ id }: { id: string }) {
 
   // ---- timeline (cut / split / reorder / duplicate): the video element plays only the kept parts
   const onTimelineError = useCallback((m: string) => toast.error(m), []);
-  const tl = useTimeline(p ?? NO_PROJECT, apply, onTimelineError);
-  const overlays = useOverlays(p ?? NO_PROJECT, apply, onTimelineError);
+  const [editLog] = useState(newEditLog);
+  const tl = useTimeline(p ?? NO_PROJECT, apply, onTimelineError, editLog);
+  const overlays = useOverlays(p ?? NO_PROJECT, apply, onTimelineError, editLog);
   const jump = useCallback((t: number) => {
     const v = videoRef.current;
     if (v) v.currentTime = t;
@@ -231,7 +233,8 @@ export function ProjectView({ id }: { id: string }) {
         <div className="w-full sm:w-auto"><Steps project={p} /></div>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(340px,460px)_minmax(0,1fr)] lg:items-start [&>*]:min-w-0">
+      {/* 7 : 3. Left: the picture and the timeline under it. Right: the export, then the tabs (settings, lines, post). */}
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,7fr)_minmax(320px,3fr)] lg:items-start [&>*]:min-w-0">
         <div className="grid min-w-0 gap-5 [&>*]:min-w-0">
           <Card className="p-3 sm:p-3">
             <VideoPanel
@@ -253,6 +256,42 @@ export function ProjectView({ id }: { id: string }) {
               onLoaded={onLoaded}
             />
           </Card>
+          <Card className="gap-0 overflow-hidden p-0">
+            <TimelinePanel
+                project={p}
+                tl={tl}
+                overlays={overlays}
+                editLog={editLog}
+                music={settings.music}
+                onMusic={(m) => onSettings({ music: m })}
+                idx={clipPlay.idx}
+                T={clipPlay.T}
+                playing={playing}
+                showPlayhead={view === "source"}
+                disabled={busy && RENDER_STAGES.includes(p.status.stage)}
+                onSeekOut={(t) => {
+                  if (view === "source") { clipPlay.seekOut(t); return; }
+                  // an exported video is showing: go back to the original at that point
+                  let acc = 0;
+                  let at = { src: 0, t: tl.clips[0]?.start ?? 0 };
+                  for (const c of tl.clips) {
+                    const l = (c.end - c.start) / (c.speed || 1);
+                    at = { src: c.src ?? 0, t: c.start + Math.min(Math.max(t - acc, 0), l) * (c.speed || 1) };
+                    if (t < acc + l) break;
+                    acc += l;
+                  }
+                  pendingSeek.current = at.t;
+                  setPlaySrc(at.src);
+                  setView("source");
+                }}
+                onSelectClip={clipPlay.setIdx}
+                onTogglePlay={togglePlay}
+                onApply={apply}
+              />
+          </Card>
+        </div>
+
+        <div className="grid min-w-0 gap-5 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:grid-rows-[auto_minmax(0,1fr)] [&>*]:min-w-0">
           <ExportPanel
             project={p}
             previewAt={outAt}
@@ -271,16 +310,13 @@ export function ProjectView({ id }: { id: string }) {
               }, 60);
             }}
           />
-        </div>
-
-        <Card className="min-w-0 gap-0 overflow-hidden p-0 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)]">
+        <Card className="min-w-0 gap-0 overflow-hidden p-0 lg:min-h-0">
           <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col gap-0">
             <div className="border-b px-4 py-3">
-              <TabsList className="w-full sm:w-auto">
-                <TabsTrigger value="lines"><Languages /> Bản dịch{p.segments.length ? ` (${p.segments.length})` : ""}</TabsTrigger>
-                <TabsTrigger value="settings"><SlidersHorizontal /> Cài đặt</TabsTrigger>
-                <TabsTrigger value="timeline"><Scissors /> Dựng phim</TabsTrigger>
-                <TabsTrigger value="publish"><Send /> Đăng Reels</TabsTrigger>
+              <TabsList className="w-full">
+                <TabsTrigger value="settings" className="min-w-0 flex-1 px-2"><SlidersHorizontal /> <span className="truncate">Cài đặt</span></TabsTrigger>
+                <TabsTrigger value="lines" className="min-w-0 flex-1 px-2"><Languages /> <span className="truncate">Bản dịch{p.segments.length ? ` (${p.segments.length})` : ""}</span></TabsTrigger>
+                <TabsTrigger value="publish" className="min-w-0 flex-1 px-2"><Send /> <span className="truncate">Đăng Reels</span></TabsTrigger>
               </TabsList>
             </div>
             <TabsContent value="lines" className="min-h-0 flex-1 overflow-y-auto">
@@ -321,43 +357,12 @@ export function ProjectView({ id }: { id: string }) {
                 }}
               />
             </TabsContent>
-            <TabsContent value="timeline" className="min-h-0 flex-1 overflow-y-auto">
-              <TimelinePanel
-                project={p}
-                tl={tl}
-                overlays={overlays}
-                music={settings.music}
-                onMusic={(m) => onSettings({ music: m })}
-                idx={clipPlay.idx}
-                T={clipPlay.T}
-                playing={playing}
-                showPlayhead={view === "source"}
-                disabled={busy && RENDER_STAGES.includes(p.status.stage)}
-                onSeekOut={(t) => {
-                  if (view === "source") { clipPlay.seekOut(t); return; }
-                  // an exported video is showing: go back to the original at that point
-                  let acc = 0;
-                  let at = { src: 0, t: tl.clips[0]?.start ?? 0 };
-                  for (const c of tl.clips) {
-                    const l = (c.end - c.start) / (c.speed || 1);
-                    at = { src: c.src ?? 0, t: c.start + Math.min(Math.max(t - acc, 0), l) * (c.speed || 1) };
-                    if (t < acc + l) break;
-                    acc += l;
-                  }
-                  pendingSeek.current = at.t;
-                  setPlaySrc(at.src);
-                  setView("source");
-                }}
-                onSelectClip={clipPlay.setIdx}
-                onTogglePlay={togglePlay}
-                onApply={apply}
-              />
-            </TabsContent>
             <TabsContent value="publish" className="min-h-0 flex-1 overflow-y-auto">
               <PublishPanel project={p} time={previewAt} apply={apply} />
             </TabsContent>
           </Tabs>
         </Card>
+        </div>
       </div>
     </div>
   );
@@ -367,9 +372,9 @@ function LoadingSkeleton() {
   return (
     <div className="grid gap-5">
       <Skeleton className="h-8 w-64" />
-      <div className="grid gap-5 lg:grid-cols-[minmax(340px,460px)_1fr]">
-        <div className="grid gap-5"><Skeleton className="aspect-[9/12]" /><Skeleton className="h-40" /></div>
-        <Skeleton className="h-[70vh]" />
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,7fr)_minmax(320px,3fr)]">
+        <div className="grid gap-5"><Skeleton className="aspect-video" /><Skeleton className="h-56" /></div>
+        <div className="grid gap-5"><Skeleton className="h-40" /><Skeleton className="h-[50vh]" /></div>
       </div>
     </div>
   );

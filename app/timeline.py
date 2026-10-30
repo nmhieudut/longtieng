@@ -27,7 +27,7 @@ EDGE = 0.05      # "covers the whole video" tolerance
 MIN_SPEED, MAX_SPEED = 0.25, 4.0
 MAX_VOLUME = 2.0
 MAX_FADE = 2.0
-PROP_DEFAULTS = {"src": 0, "speed": 1.0, "volume": 1.0, "fade_in": 0.0, "fade_out": 0.0}
+PROP_DEFAULTS = {"src": 0, "speed": 1.0, "volume": 1.0, "fade_in": 0.0, "fade_out": 0.0, "transition": 0.0}
 
 
 def speed(c: dict) -> float:
@@ -72,6 +72,7 @@ def validate(raw, duration: float, durations: dict[int, float] | None = None, ma
             vol = round(min(MAX_VOLUME, max(0.0, float(c.get("volume", 1.0)))), 2)
             fi = round(min(MAX_FADE, max(0.0, float(c.get("fade_in", 0.0)))), 2)
             fo = round(min(MAX_FADE, max(0.0, float(c.get("fade_out", 0.0)))), 2)
+            tr = round(min(MAX_FADE, max(0.0, float(c.get("transition", 0.0)))), 2)
         except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
             raise ValueError("Có đoạn không hợp lệ.") from None
         if src not in durations:
@@ -85,23 +86,34 @@ def validate(raw, duration: float, durations: dict[int, float] | None = None, ma
         seen.add(cid)
         length = (b - a) / spd
         out.append({"id": cid, "src": src, "start": a, "end": b, "speed": spd, "volume": vol,
-                    "fade_in": min(fi, length / 2), "fade_out": min(fo, length / 2)})
+                    "fade_in": min(fi, length / 2), "fade_out": min(fo, length / 2), "transition": tr})
     if max_total is not None and out_duration(out) > max_total:
         raise ValueError(f"Video sau khi chỉnh dài {out_duration(out) / 60:.1f} phút, vượt giới hạn {max_total / 60:g} phút.")
     return out
 
 
+def trans(clips: list[dict], i: int) -> float:
+    """Seconds clip i overlaps the clip before it (a crossfade). Never more than half of either clip."""
+    if i == 0:
+        return 0.0
+    return max(0.0, min(float(clips[i].get("transition") or 0.0), clip_len(clips[i - 1]) / 2, clip_len(clips[i]) / 2))
+
+
 def layout(clips: list[dict]) -> list[tuple[dict, float]]:
-    """Each clip with the output time at which it starts."""
+    """Each clip with the output time at which it starts (a crossfade pulls the next clip back by its length)."""
     t, rows = 0.0, []
-    for c in clips:
+    for i, c in enumerate(clips):
+        t -= trans(clips, i)
         rows.append((c, t))
         t += clip_len(c)
     return rows
 
 
 def out_duration(clips: list[dict]) -> float:
-    return sum(clip_len(c) for c in clips)
+    if not clips:
+        return 0.0
+    c, at = layout(clips)[-1]
+    return at + clip_len(c)
 
 
 def map_segments(clips: list[dict], segs: list[dict]) -> list[dict]:
@@ -109,7 +121,7 @@ def map_segments(clips: list[dict], segs: list[dict]) -> list[dict]:
     video); a clip used twice brings its lines twice (same id). Lines in cut-out parts are dropped. The copies
     are not saved anywhere."""
     out = []
-    for c, o in layout(clips):
+    for ci, (c, o) in enumerate(layout(clips)):
         k = speed(c)
         for s in segs:
             if s.get("src_id", 0) != c.get("src", 0):
@@ -121,7 +133,20 @@ def map_segments(clips: list[dict], segs: list[dict]) -> list[dict]:
             v["src_id"] = 0  # in the edited video every line is on one timeline, whichever video it came from
             v["start"] = round(o + (max(s["start"], c["start"]) - c["start"]) / k, 3)
             v["end"] = round(o + (min(s["end"], c["end"]) - c["start"]) / k, 3)
+            v["_clip"] = ci
             out.append(v)
+    out.sort(key=lambda v: v["start"])  # a crossfade makes the next clip's first lines start before this one's last
+    # Two voices must not talk over each other where clips overlap: the line that starts later waits until the
+    # other has finished (a push is never longer than the overlap: a line ends with its clip).
+    prev, pushed = None, False
+    for v in out:
+        if prev is not None and v["start"] < prev["end"] - 1e-9 and (v["_clip"] != prev["_clip"] or pushed):
+            d = prev["end"] - v["start"]
+            v["start"], v["end"] = round(v["start"] + d, 3), round(v["end"] + d, 3)
+            pushed = True
+        else:
+            pushed = False
+        prev = v
     return out
 
 
@@ -214,7 +239,8 @@ def build_edit(proj_dir: Path, p: dict, clips: list[dict], on_progress=None) -> 
                 str(source_path(proj_dir, p, c.get("src", 0)))]
     n = len(clips)
     # another video can have another size, frame rate, no sound: bring every clip to the main video's format
-    mixed = any(c.get("src", 0) != 0 for c in clips)
+    crossfades = any(trans(clips, i) > 0 for i in range(n))
+    mixed = any(c.get("src", 0) != 0 for c in clips) or crossfades  # xfade needs identical size, fps and sound format
     W, H = int(p["media"]["width"]) // 2 * 2, int(p["media"]["height"]) // 2 * 2
     fps = _fps(proj_dir / p["source"]["file"]) if mixed else 30.0
     extras = {e["id"]: e for e in extra_sources(p)}
@@ -230,6 +256,7 @@ def build_edit(proj_dir: Path, p: dict, clips: list[dict], on_progress=None) -> 
             vf.append(f"fade=t=in:st=0:d={c['fade_in']:.2f}")
         if c.get("fade_out"):
             vf.append(f"fade=t=out:st={max(0.0, L - c['fade_out']):.3f}:d={c['fade_out']:.2f}")
+        vf.append("settb=AVTB")  # xfade refuses inputs whose time bases differ (concat outputs AVTB, fps outputs 1/fps)
         silent = c.get("src", 0) != 0 and not extras.get(c["src"], {}).get("has_audio", True)
         if silent:
             cmd += ["-f", "lavfi", "-t", f"{L:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
@@ -249,7 +276,22 @@ def build_edit(proj_dir: Path, p: dict, clips: list[dict], on_progress=None) -> 
             af.append(f"afade=t=out:st={max(0.0, L - c['fade_out']):.3f}:d={c['fade_out']:.2f}")
         chains.append(f"[{i}:v:0]{','.join(vf)}[v{i}]")
         chains.append(f"{a_in}{','.join(af) if af else 'anull'}[a{i}]")
-    graph = ";".join(chains) + ";" + "".join(f"[v{i}][a{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]"
+    if not crossfades:
+        graph = ";".join(chains) + ";" + "".join(f"[v{i}][a{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]"
+    else:
+        # join the clips one after another: a crossfade where the clip asks for one, a plain cut elsewhere
+        joins, av, aa, acc = [], "[v0]", "[a0]", clip_len(clips[0])
+        for i in range(1, n):
+            d, last = trans(clips, i), i == n - 1
+            ov, oa = ("[v]", "[a]") if last else (f"[xv{i}]", f"[xa{i}]")
+            if d > 0:
+                joins.append(f"{av}[v{i}]xfade=transition=fade:duration={d:.3f}:offset={max(0.0, acc - d):.3f}{ov}")
+                joins.append(f"{aa}[a{i}]acrossfade=d={d:.3f}:c1=tri:c2=tri{oa}")
+            else:
+                joins.append(f"{av}{aa}[v{i}][a{i}]concat=n=2:v=1:a=1{ov}{oa}")
+            acc += clip_len(clips[i]) - d
+            av, aa = ov, oa
+        graph = ";".join(chains + joins)
     part = out.with_name("edit.part.mp4")
     cmd += ["-filter_complex", graph, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast",
             "-crf", "16", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(part)]

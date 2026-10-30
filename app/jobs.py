@@ -190,12 +190,18 @@ def _rewrite(pid: str):
 
 # ---------- another video added to the timeline: recognise + translate its speech like the main one
 
-def submit_extra(pid: str, n: int):
-    _submit(pid, _prepare_extra, n)
+def submit_extra(pid: str, n: int, retry: bool = False):
+    _submit(pid, _prepare_extra, n, retry)
 
 
-def _prepare_extra(pid: str, n: int):
+def _prepare_extra(pid: str, n: int, retry: bool = False):
     d = store.pdir(pid)
+    if retry:  # start from nothing: the lines (and their voices) of this video from the earlier attempt
+        gone = [s["id"] for s in store.load(pid)["segments"] if s.get("src_id", 0) == n]
+        store.update(pid, lambda q: q.__setitem__("segments", [s for s in q["segments"] if s.get("src_id", 0) != n]))
+        for sid in gone:
+            for f in (d / "tts").glob(f"{sid}_*"):
+                f.unlink(missing_ok=True)
     p = store.load(pid)
     info = next(e for e in timeline.extra_sources(p) if e["id"] == n)
     st = p["settings"]
