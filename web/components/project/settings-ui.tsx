@@ -2,28 +2,23 @@
 
 import type { ReactNode } from "react";
 
-import { AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 
-/** One collapsible settings group: header shows a one-line summary, body opens on click. */
-export function Section({ value, icon, title, summary, action, children }: {
-  value: string; icon: ReactNode; title: string; summary?: ReactNode; action?: ReactNode; children: ReactNode;
+/** One settings page (a tab of the side panel): icon, title and a one-line summary on top, the controls below. */
+export function Section({ icon, title, summary, action, children }: {
+  value?: string; icon: ReactNode; title: string; summary?: ReactNode; action?: ReactNode; children: ReactNode;
 }) {
   return (
-    <AccordionItem value={value} className="border-b last:border-b-0">
-      <div className="flex items-center gap-2">
-        <AccordionTrigger className="min-w-0 flex-1 items-center gap-2 py-3.5 hover:no-underline">
-          <span className="text-primary [&_svg]:size-4">{icon}</span>
-          <span className="shrink-0 text-sm font-semibold">{title}</span>
-          <span className="min-w-0 flex-1 truncate pl-2 text-right text-xs font-normal text-muted-foreground">{summary}</span>
-        </AccordionTrigger>
+    <section className="grid min-w-0 gap-3">
+      <header className="flex min-w-0 items-center gap-2 border-b pb-2">
+        <span className="text-primary [&_svg]:size-4">{icon}</span>
+        <h3 className="shrink-0 text-sm font-semibold">{title}</h3>
+        <span className="min-w-0 flex-1 truncate text-right text-xs text-muted-foreground">{summary}</span>
         {action}
-      </div>
-      <AccordionContent>
-        <div className="grid grid-cols-[minmax(0,1fr)] gap-3 pb-2">{children}</div>
-      </AccordionContent>
-    </AccordionItem>
+      </header>
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3">{children}</div>
+    </section>
   );
 }
 

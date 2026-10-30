@@ -1,10 +1,10 @@
 "use client";
 
-import { Copy, Gauge, ImagePlus, Loader2, Plus, Redo2, RotateCw, Scissors, Trash2, Type, Undo2, Video, Volume2, ZoomIn } from "lucide-react";
+import { Copy, Gauge, HelpCircle, ImagePlus, Loader2, Plus, Redo2, RotateCcw, RotateCw, Scissors, Trash2, Type, Undo2, Video, Volume2, ZoomIn } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -47,17 +47,10 @@ const STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
 function ToolBtn({ label, hint, onClick, off, disabled, children }: {
   label: string; hint: string; onClick: () => void; off?: boolean; disabled: boolean; children: React.ReactNode;
 }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button type="button" variant="outline" size="sm" disabled={disabled || off} onClick={onClick} aria-label={label}>{children}</Button>
-      </TooltipTrigger>
-      <TooltipContent>{label} · {hint}</TooltipContent>
-    </Tooltip>
-  );
+  return <IconButton label={label} hint={hint} variant="outline" disabled={disabled || off} onClick={onClick}>{children}</IconButton>;
 }
 
-export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusic, idx, T, playing, showPlayhead, disabled, onSeekOut, onSelectClip, onTogglePlay, onApply }: Props) {
+export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusic, idx, T, showPlayhead, disabled, onSeekOut, onSelectClip, onTogglePlay, onApply }: Props) {
   const duration = p.media?.duration ?? 0;
   const { clips, commit, tweak, undo, redo } = tl;
   const rows = useMemo(() => layout(clips), [clips]);
@@ -176,7 +169,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
     const on = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      if (t?.closest('[role="combobox"], [role="slider"], [role="listbox"], select')) return;
+      if (t?.closest('[role="combobox"], [role="slider"], [role="listbox"], [role="dialog"], [role="alertdialog"], [role="menu"], select')) return;
       if (e.key === " " && t?.closest("button")) return;   // Space presses a focused button
       const a = act.current;
       const mod = e.metaKey || e.ctrlKey;
@@ -263,14 +256,14 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
   if (!p.media) return <p className="p-4 text-sm text-muted-foreground">Video chưa sẵn sàng.</p>;
 
   return (
-    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 p-4">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-2 p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <ToolBtn disabled={disabled} label="Cắt đôi tại đường chỉ" hint="S" onClick={cut}><Scissors /> Cắt đôi</ToolBtn>
-        <ToolBtn disabled={disabled} label="Xoá đoạn đang chọn" hint="Delete" onClick={del} off={clips.length <= 1}><Trash2 /> Xoá</ToolBtn>
-        <ToolBtn disabled={disabled} label="Nhân đôi đoạn đang chọn" hint="D" onClick={dup}><Copy /> Nhân đôi</ToolBtn>
+        <ToolBtn disabled={disabled} label="Cắt đôi tại đường chỉ" hint="S" onClick={cut}><Scissors /></ToolBtn>
+        <ToolBtn disabled={disabled} label="Xoá đoạn đang chọn" hint="Delete" onClick={del} off={clips.length <= 1}><Trash2 /></ToolBtn>
+        <ToolBtn disabled={disabled} label="Nhân đôi đoạn đang chọn" hint="D" onClick={dup}><Copy /></ToolBtn>
         <span className="mx-1 h-5 w-px bg-border" />
-        <ToolBtn disabled={disabled || isActive(p) || addPct !== null} label="Thêm video khác vào cuối timeline" hint="nhận dạng và dịch lời luôn"
-          onClick={() => addInput.current?.click()}>{addPct !== null ? <Loader2 className="animate-spin" /> : <Video />} Thêm video</ToolBtn>
+        <ToolBtn disabled={disabled || isActive(p) || addPct !== null || p.status.stage === "new"} label="Thêm video khác vào cuối timeline" hint="nhận dạng và dịch lời luôn"
+          onClick={() => addInput.current?.click()}>{addPct !== null ? <Loader2 className="animate-spin" /> : <Video />}</ToolBtn>
         <input ref={addInput} type="file" hidden accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mkv,.m4v"
           onChange={async (e) => {
             const f = e.target.files?.[0];
@@ -281,19 +274,27 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
             catch (err) { toast.error((err as Error).message); }
             finally { setAddPct(null); }
           }} />
-        <ToolBtn disabled={disabled} label="Thêm chữ tại đường chỉ" hint="chữ hiện 3 giây" onClick={() => addOverlay("text")}><Type /> Chữ</ToolBtn>
-        <ToolBtn disabled={disabled} label="Thêm hình dán tại đường chỉ" hint="ảnh trong thư viện" onClick={addSticker}><ImagePlus /> Hình dán</ToolBtn>
+        <ToolBtn disabled={disabled} label="Thêm chữ tại đường chỉ" hint="chữ hiện 3 giây" onClick={() => addOverlay("text")}><Type /></ToolBtn>
+        <ToolBtn disabled={disabled} label="Thêm hình dán tại đường chỉ" hint="ảnh trong thư viện" onClick={addSticker}><ImagePlus /></ToolBtn>
         <span className="mx-1 h-5 w-px bg-border" />
         <ToolBtn disabled={disabled} label="Hoàn tác" hint="Ctrl/⌘ Z" onClick={doUndo} off={!tl.canUndo && !overlays.canUndo}><Undo2 /></ToolBtn>
         <ToolBtn disabled={disabled} label="Làm lại" hint="Ctrl/⌘ Shift Z" onClick={doRedo} off={!tl.canRedo && !overlays.canRedo}><Redo2 /></ToolBtn>
-        <Button type="button" variant="ghost" size="sm" disabled={disabled || !tl.edited} onClick={reset}>Về nguyên bản</Button>
+        <ToolBtn disabled={disabled} off={!tl.edited} label="Về nguyên bản (bỏ hết cắt ghép)" hint="video gốc không đổi" onClick={reset}><RotateCcw /></ToolBtn>
         <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
           <ZoomIn className="size-4" />
           <Slider className="w-28" min={1} max={12} step={0.1} value={[zoom]} onValueChange={([v]) => setZoom(v)} aria-label="Phóng to timeline" />
         </span>
       </div>
 
-      <p className="font-mono text-xs tabular-nums text-muted-foreground">
+      <p className="flex items-center gap-1 font-mono text-xs tabular-nums text-muted-foreground">
+        <Tooltip>
+          <TooltipTrigger asChild><button type="button" aria-label="Cách dùng timeline" className="mr-1 hover:text-foreground"><HelpCircle className="size-3.5" /></button></TooltipTrigger>
+          <TooltipContent className="max-w-sm">
+            Bấm vào thanh hoặc kéo đường chỉ để chọn vị trí. Kéo hai mép một đoạn để cắt bớt, kéo cả đoạn sang cạnh để đổi thứ tự.
+            Các câu lồng tiếng nằm trong phần bị cắt sẽ tự bỏ, câu còn lại tự dời theo. Video gốc không bị đổi; bấm Xuất để ra bản đã cắt ghép.
+            Đoạn ngắn nhất {MIN_CLIP} giây.
+          </TooltipContent>
+        </Tooltip>
         {clock(showPlayhead ? T : 0)} / {clock(total)}
         {tl.edited && <span className="ml-2 font-sans text-primary">· đã chỉnh, video xuất sẽ dài {clock(total)} (gốc {clock(duration)})</span>}
         {disabled && <span className="ml-2 font-sans text-fast-foreground">· đang xuất video, tạm khoá chỉnh sửa</span>}
@@ -430,8 +431,8 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
       {selectedOv && <OverlayInspector o={selectedOv} total={total} disabled={disabled} onChange={patchOverlay} onDelete={removeOverlay} />}
 
       {!selectedOv && !selMusic && clips[sel] && (
-        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 rounded-xl border p-3 sm:grid-cols-2" aria-label="Thuộc tính đoạn đang chọn">
-          <p className="text-xs font-medium sm:col-span-2">
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-x-4 gap-y-2 rounded-xl border p-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Thuộc tính đoạn đang chọn">
+          <p className="text-xs font-medium sm:col-span-2 xl:col-span-4">
             Đoạn {sel + 1}/{clips.length} · {clock(len(clips[sel]))}
           </p>
           <div className="grid gap-2">
@@ -451,12 +452,11 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
             </div>
           </div>
           <div className="grid gap-2">
-            <Label className="flex items-center gap-1.5 text-xs text-muted-foreground"><Volume2 className="size-3.5" /> Âm thanh gốc của đoạn
+            <Label className="flex items-center gap-1.5 text-xs text-muted-foreground" title="0% là tắt tiếng đoạn này (giọng lồng vẫn đọc). Trên 100% chỉ có khi xuất, nghe thử bị giới hạn ở 100%."><Volume2 className="size-3.5" /> Âm gốc
               <span className="ml-auto font-mono text-foreground">{Math.round((clips[sel].volume ?? 1) * 100)}%</span>
             </Label>
             <Slider min={0} max={2} step={0.05} disabled={disabled} value={[clips[sel].volume ?? 1]}
               onValueChange={([v]) => tw(setProps(clips, sel, { volume: v }), `vol${sel}`)} aria-label="Âm thanh gốc" />
-            <p className="text-[11px] text-muted-foreground">0% là tắt tiếng đoạn này (giọng lồng vẫn đọc). Trên 100% chỉ có khi xuất, nghe thử bị giới hạn ở 100%.</p>
           </div>
           <div className="grid gap-2">
             <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">Mờ dần vào
@@ -465,15 +465,12 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
             <Slider min={0} max={2} step={0.1} disabled={disabled} value={[clips[sel].fade_in ?? 0]}
               onValueChange={([v]) => tw(setProps(clips, sel, { fade_in: v }), `fi${sel}`)} aria-label="Mờ dần vào" />
           </div>
-          <div className="grid gap-2 sm:col-span-2">
-            <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">Chuyển cảnh từ đoạn trước (pha trộn hai đoạn)
+          <div className="grid gap-2">
+            <Label className="flex items-center gap-1.5 text-xs text-muted-foreground" title="Hai đoạn chồng lên nhau đúng bằng thời gian này (tối đa một nửa đoạn ngắn hơn), nên video xuất ngắn đi tương ứng. Nghe thử chưa hiện hiệu ứng, bản xuất mới có.">Chuyển cảnh
               <span className="ml-auto font-mono text-foreground">{sel === 0 ? "—" : `${(clips[sel].transition ?? 0).toFixed(1)}s`}</span>
             </Label>
             <Slider min={0} max={2} step={0.1} disabled={disabled || sel === 0} value={[clips[sel].transition ?? 0]}
               onValueChange={([v]) => tw(setProps(clips, sel, { transition: v }), `tr${sel}`)} aria-label="Chuyển cảnh" />
-            <p className="text-[11px] text-muted-foreground">
-              {sel === 0 ? "Đoạn đầu tiên không có đoạn trước." : "Hai đoạn chồng lên nhau đúng bằng thời gian này (tối đa một nửa đoạn ngắn hơn), nên video xuất ngắn đi tương ứng. Nghe thử chưa hiện hiệu ứng, bản xuất mới có."}
-            </p>
           </div>
           <div className="grid gap-2">
             <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">Mờ dần ra
@@ -484,12 +481,6 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
           </div>
         </div>
       )}
-
-      <p className="text-xs text-muted-foreground">
-        Bấm vào thanh hoặc kéo đường chỉ để chọn vị trí. Kéo hai mép một đoạn để cắt bớt, kéo cả đoạn sang cạnh để đổi thứ tự.
-        Các câu lồng tiếng nằm trong phần bị cắt sẽ tự bỏ, câu còn lại tự dời theo. Video gốc không bị đổi; bấm Xuất để ra bản đã cắt ghép.
-        {" "}{playing ? "" : `Đoạn ngắn nhất ${MIN_CLIP} giây.`}
-      </p>
     </div>
   );
 }

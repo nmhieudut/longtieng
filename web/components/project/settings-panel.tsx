@@ -2,10 +2,10 @@
 
 import { BookmarkCheck, Captions, CheckCircle2, Eye, EyeOff, Loader2, Mic, Music, ScanText } from "lucide-react";
 import { toast } from "sonner";
-import { useEffect, useRef, useState } from "react";
+import { type Ref, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Accordion } from "@/components/ui/accordion";
+import { IconButton } from "@/components/ui/icon-button";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { VoicePicker } from "@/components/voice-picker";
@@ -20,12 +20,15 @@ import type { DeepPartial, Project, Settings, VoiceInfo } from "@/lib/api";
 
 type Props = {
   projectId: string;
+  section: SectionId;                          // only this one is shown; the others stay mounted so drafts survive tab switches
+  handle?: Ref<SettingsHandle>;                // lets the action bar save pending edits before it acts
+  sourceLangs: Record<string, string>;
+  langLocked: boolean;
   previewAt: number;                           // video time used for the still preview
   subStyles: Record<string, string>;
   reviewStyles: Record<string, string>;
   targetLangs: Record<string, { label: string; voice: string }>;
   translatedTo: string;                        // language the lines are in right now
-  onRewrite: () => Promise<void>;
   settings: Settings;
   voices: Record<string, VoiceInfo>;
   canDemucs: boolean;
@@ -37,8 +40,13 @@ type Props = {
   onDetect: () => Promise<void>;
 };
 
+export type SettingsHandle = { flush: () => Promise<void> };
+
+export const SECTION_IDS = ["voice", "script", "audio", "music", "subs", "frame", "color", "logo", "mask"] as const;
+export type SectionId = (typeof SECTION_IDS)[number];
+
 export function SettingsPanel({
-  projectId, previewAt, subStyles, reviewStyles, targetLangs, translatedTo, onRewrite,
+  projectId, section, handle, sourceLangs, langLocked, previewAt, subStyles, reviewStyles, targetLangs, translatedTo,
   settings, voices, canDemucs, disabled, busy, onDraft, onSave, maskDetect, onDetect,
 }: Props) {
   const [detecting, setDetecting] = useState(false);
@@ -70,7 +78,7 @@ export function SettingsPanel({
       const body = pending.current;
       pending.current = {};
       timer.current = null;
-      await onSave(body);
+      try { await onSave(body); } catch (e) { toast.error((e as Error).message); }
     }, 450);
   }
 
@@ -83,6 +91,8 @@ export function SettingsPanel({
     pending.current = {};
     await onSave(body);
   }
+
+  useImperativeHandle(handle, () => ({ flush }));
 
   async function showStill() {
     setStillBusy(true);
@@ -109,20 +119,19 @@ export function SettingsPanel({
     }
   }
 
+  const show = (id: SectionId) => ({ hidden: section !== id });
   return (
-    <>
-    <div className="flex flex-wrap gap-2 border-b px-4 py-3">
+    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex items-center gap-1 border-b px-3 py-1.5">
       {disabled && (
-        <p className="w-full rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-          Đang lồng tiếng / xuất video nên tạm khoá cài đặt. Đợi xong hoặc bấm Huỷ để chỉnh.
-        </p>
+        <p className="mr-auto text-xs text-muted-foreground">Đang xử lý nên tạm khoá cài đặt.</p>
       )}
-      <Button size="sm" variant="secondary" disabled={stillBusy} onClick={showStill}>
-        {stillBusy ? <Loader2 className="animate-spin" /> : <Eye />} Xem ảnh khung hình xuất ra
-      </Button>
-      <Button size="sm" variant="ghost" onClick={saveDefaults} title="Áp dụng cho video mới">
-        <BookmarkCheck /> Lưu làm mặc định
-      </Button>
+      <span className="ml-auto flex gap-1">
+        <IconButton label="Xem ảnh khung hình xuất ra" disabled={stillBusy} onClick={showStill}>
+          {stillBusy ? <Loader2 className="animate-spin" /> : <Eye />}
+        </IconButton>
+        <IconButton label="Lưu cài đặt này làm mặc định cho video mới" onClick={saveDefaults}><BookmarkCheck /></IconButton>
+      </span>
     </div>
     <Dialog open={!!still} onOpenChange={(o) => { if (!o && still) { URL.revokeObjectURL(still); setStill(null); } }}>
       <DialogContent className="sm:max-w-xl">
@@ -134,19 +143,19 @@ export function SettingsPanel({
         {still && <img src={still} alt="Khung hình xuất ra" className="mx-auto max-h-[70vh] rounded-lg border" />}
       </DialogContent>
     </Dialog>
-    <Accordion type="multiple" className="px-4">
-      <Section value="voice" icon={<Mic />} title="Giọng đọc"
+    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
+      <div {...show("voice")}><Section value="voice" icon={<Mic />} title="Giọng đọc"
         summary={`${voices[s.voice]?.label ?? s.voice} · ${s.rate.toFixed(2)}×`}>
         <Field label="Bấm ▶ để nghe thử">
           <VoicePicker voices={voicesFor(voices, s.target)} value={s.voice} disabled={disabled} onChange={(v) => change({ voice: v })} className="max-h-80" />
         </Field>
         <SliderField label="Tốc độ nói" value={s.rate} min={0.8} max={1.3} step={0.05} disabled={disabled}
           show={(v) => `${v.toFixed(2)}×`} onChange={(v) => change({ rate: v })} />
-      </Section>
+      </Section></div>
 
-      <ScriptSection s={s} styles={reviewStyles} targetLangs={targetLangs} translatedTo={translatedTo} disabled={disabled} busy={busy} change={change} onRewrite={async () => { await flush(); await onRewrite(); }} />
+      <div {...show("script")}><ScriptSection s={s} styles={reviewStyles} targetLangs={targetLangs} sourceLangs={sourceLangs} langLocked={langLocked} translatedTo={translatedTo} disabled={disabled} change={change} /></div>
 
-      <Section value="audio" icon={<Music />} title="Âm thanh gốc"
+      <div {...show("audio")}><Section value="audio" icon={<Music />} title="Âm thanh gốc"
         summary={s.audio_mode === "mute" ? "Tắt" : `${s.audio_mode === "duck" ? "Giảm nhỏ" : "Giữ nhạc nền"} · ${Math.round(s.orig_volume * 100)}%`}>
         <ToggleGroup type="single" variant="outline" className="w-full" disabled={disabled}
           value={s.audio_mode} onValueChange={(v) => v && change({ audio_mode: v as Settings["audio_mode"] })}>
@@ -165,11 +174,11 @@ export function SettingsPanel({
           <SliderField label="Âm lượng nền" value={s.orig_volume} min={0} max={1} step={0.05} disabled={disabled}
             show={(v) => `${Math.round(v * 100)}%`} onChange={(v) => change({ orig_volume: v })} />
         )}
-      </Section>
+      </Section></div>
 
-      <MusicSection music={s.music} disabled={disabled} onChange={(m) => change({ music: m })} />
+      <div {...show("music")}><MusicSection music={s.music} disabled={disabled} onChange={(m) => change({ music: m })} /></div>
 
-      <Section value="subs" icon={<Captions />} title="Phụ đề"
+      <div {...show("subs")}><Section value="subs" icon={<Captions />} title="Phụ đề"
         summary={s.subtitle_mode === "burn" ? `Ghi vào video · ${s.sub_size.toFixed(1)}×` : s.subtitle_mode === "srt" ? "Chỉ file .srt" : "Không"}>
         <ToggleGroup type="single" variant="outline" className="w-full" disabled={disabled}
           value={s.subtitle_mode} onValueChange={(v) => v && change({ subtitle_mode: v as Settings["subtitle_mode"] })}>
@@ -188,13 +197,13 @@ export function SettingsPanel({
             )}
           </>
         )}
-      </Section>
+      </Section></div>
 
-      <FrameSection s={s} disabled={disabled} change={change} preview={null} />
-      <ColorSection s={s} disabled={disabled} change={change} />
-      <LogoSection s={s} disabled={disabled} change={change} />
+      <div {...show("frame")}><FrameSection s={s} disabled={disabled} change={change} preview={null} /></div>
+      <div {...show("color")}><ColorSection s={s} disabled={disabled} change={change} /></div>
+      <div {...show("logo")}><LogoSection s={s} disabled={disabled} change={change} /></div>
 
-      <Section
+      <div {...show("mask")}><Section
         value="mask"
         icon={<EyeOff />}
         title="Che phụ đề gốc"
@@ -241,9 +250,9 @@ export function SettingsPanel({
             </p>
           </>
         )}
-      </Section>
-    </Accordion>
-    </>
+      </Section></div>
+    </div>
+    </div>
   );
 }
 

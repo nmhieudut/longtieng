@@ -7,6 +7,7 @@ const STEPS = ["Nhận dạng & dịch", "Duyệt & chỉnh câu", "Lồng tiế
 
 function current(p: Project): { idx: number; state: "active" | "wait" | "error" | "done" } {
   const st = p.status.stage;
+  if (st === "new") return { idx: 0, state: "wait" };
   if (st === "error") return { idx: p.segments.length ? 1 : 0, state: "error" };
   if (st === "done") return { idx: 3, state: "done" };
   if (["dubbing", "separating", "rendering"].includes(st)) return { idx: 2, state: "active" };

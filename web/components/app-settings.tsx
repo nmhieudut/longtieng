@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, type AppSettings, desktopApi } from "@/lib/api";
 
 /** App-wide settings (gear icon): OpenAI key, where data lives, speech engine. */
@@ -94,11 +95,16 @@ export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label="Cài đặt">
-          <Settings className="size-4" />
-        </Button>
-      </DialogTrigger>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DialogTrigger asChild>
+            <Button variant="ghost" size="icon-sm" aria-label="Cài đặt ứng dụng">
+              <Settings className="size-4" />
+            </Button>
+          </DialogTrigger>
+        </TooltipTrigger>
+        <TooltipContent>Cài đặt ứng dụng (OpenAI key, thư mục lưu, giọng offline)</TooltipContent>
+      </Tooltip>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Cài đặt</DialogTitle>

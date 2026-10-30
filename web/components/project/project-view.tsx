@@ -1,27 +1,25 @@
 "use client";
 
-import { ArrowLeft, Languages, Send, SlidersHorizontal, WifiOff } from "lucide-react";
+import { AudioLines, Captions, EyeOff, Frame, ImageIcon, Languages, Mic, Music, Palette, Send, Sparkles, WifiOff } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Card } from "@/components/ui/card";
+import { IconButton } from "@/components/ui/icon-button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, type Config, type DeepPartial, fileUrl, isActive, type Project, type Settings } from "@/lib/api";
 
 import { SegmentList } from "./segment-list";
-import { SettingsPanel } from "./settings-panel";
-import { StageBadge } from "./stage-badge";
-import { ExportPanel } from "./export-panel";
-import { Steps } from "./steps";
+import { SECTION_IDS, type SectionId, SettingsPanel, type SettingsHandle } from "./settings-panel";
+import { ActionBar } from "./action-bar";
 import { useProject } from "./use-project";
 import { PublishPanel } from "./publish-panel";
 import { TimelinePanel } from "./timeline-panel";
 import { useClipPlayback } from "./use-clip-playback";
 import { newEditLog } from "./edit-log";
 import { useOverlays } from "./use-overlays";
-import { locate, mapLines } from "@/lib/timeline";
+import { locate, mapLines, totalLen } from "@/lib/timeline";
 import { useTimeline } from "./use-timeline";
 import { VideoPanel, type VideoView } from "./video-panel";
 
@@ -34,7 +32,10 @@ export function ProjectView({ id }: { id: string }) {
   const [view, setView] = useState<VideoView>("source");
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [tab, setTab] = useState("settings");
+  const [tabSel, setTab] = useState<string | null>(null);
+  const [volume, setVolume] = useState(1);
+  const [muted, setMuted] = useState(false);
+  const settingsRef = useRef<SettingsHandle>(null);
   const [draft, setDraft] = useState<Settings | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pendingShow = useRef<"preview" | "final" | null>(null);
@@ -85,7 +86,7 @@ export function ProjectView({ id }: { id: string }) {
     setTime(t);
   }, []);
   const clipPlay = useClipPlayback({
-    videoRef, clips: tl.clips, loaded: loadedSrc, active: view === "source" && tl.edited, playing, time,
+    videoRef, clips: tl.clips, loaded: loadedSrc, active: view === "source" && tl.edited, playing, time, volume, muted,
     onJump: jump, onSwitch: switchTo,
   });
   const togglePlay = useCallback(() => {
@@ -213,30 +214,62 @@ export function ProjectView({ id }: { id: string }) {
   const settings = draft ?? p.settings;
   const previewAt = view === "preview" || loadedSrc !== 0 ? 0 : time;   // main video time (still preview, cover)
   const outAt = view === "preview" ? 0 : tl.edited && view === "source" ? clipPlay.T : time;  // output time (30 s preview)
+  const fresh = p.status.stage === "new" && p.segments.length === 0;
+  const tab = tabSel ?? (fresh ? "script" : "lines");
+  const locked = busy && RENDER_STAGES.includes(p.status.stage);
+  const sectionTab = (SECTION_IDS as readonly string[]).includes(tab) ? (tab as SectionId) : null;
+  const flushAll = async () => {
+    const a = document.activeElement;
+    if (a instanceof HTMLTextAreaElement) { a.blur(); await new Promise((r) => setTimeout(r, 300)); }  // a line being typed saves on blur
+     await settingsRef.current?.flush(); await tl.flush(); await overlays.flush(); };
+
+  const RAIL: { id: string; label: string; icon: React.ReactNode }[] = [
+    { id: "lines", label: `Bản dịch${p.segments.length ? ` (${p.segments.length})` : ""}`, icon: <Languages /> },
+    { id: "script", label: "Ngôn ngữ & lời thoại", icon: <Sparkles /> },
+    { id: "voice", label: "Giọng đọc", icon: <Mic /> },
+    { id: "audio", label: "Âm thanh gốc", icon: <AudioLines /> },
+    { id: "music", label: "Nhạc nền", icon: <Music /> },
+    { id: "subs", label: "Phụ đề", icon: <Captions /> },
+    { id: "frame", label: "Khung hình", icon: <Frame /> },
+    { id: "color", label: "Chỉnh màu", icon: <Palette /> },
+    { id: "logo", label: "Logo", icon: <ImageIcon /> },
+    { id: "mask", label: "Che phụ đề gốc", icon: <EyeOff /> },
+    { id: "publish", label: "Đăng Reels", icon: <Send /> },
+  ];
 
   return (
-    <div className="grid gap-5 [&>*]:min-w-0">
+    <div className="flex min-h-0 flex-1 flex-col gap-2 [&>*]:min-w-0">
       {offline && (
-        <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+        <div className="flex shrink-0 items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2 text-sm text-destructive">
           <WifiOff className="size-4 shrink-0" />
           Mất kết nối tới server. Kiểm tra server còn chạy không (uv run python -m app). Trang sẽ tự kết nối lại.
         </div>
       )}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-        <Link href="/" aria-label="Về danh sách" className="grid size-9 shrink-0 place-items-center rounded-xl border bg-card hover:bg-accent">
-          <ArrowLeft className="size-4" />
-        </Link>
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate font-heading text-xl font-bold tracking-[-0.02em]" title={p.title}>{p.title}</h1>
-        </div>
-        <StageBadge stage={p.status.stage} hasFinal={!!p.outputs.final} progress={p.status.progress} />
-        <div className="w-full sm:w-auto"><Steps project={p} /></div>
-      </div>
+      <ActionBar
+        project={p}
+        previewAt={outAt}
+        onStart={() => run(async () => { await flushAll(); return api.start(id, false); })}
+        onSaveToFolder={async () => { await run(() => api.saveToFolder(id)); }}
+        onRetry={() => run(() => api.retry(id))}
+        onCancel={() => run(() => api.cancel(id))}
+        onRewrite={async () => { await flushAll(); await run(() => api.rewrite(id)); }}
+        onPreview={() => { pendingShow.current = "preview"; run(async () => { await flushAll(); return api.render(id, outAt); }); }}
+        onRender={() => { pendingShow.current = "final"; run(async () => { await flushAll(); return api.render(id, null); }); }}
+        onJump={(i) => {
+          setTab("lines");
+          seekAt(p.segments[i].src_id ?? 0, p.segments[i].start + 0.01);
+          setTimeout(() => {
+            const row = document.querySelector<HTMLElement>(`[data-idx="${i}"]`);
+            row?.scrollIntoView({ block: "center", behavior: "smooth" });
+            row?.querySelector("textarea")?.focus({ preventScroll: true });
+          }, 60);
+        }}
+      />
 
-      {/* 7 : 3. Left: the picture and the timeline under it. Right: the export, then the tabs (settings, lines, post). */}
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,7fr)_minmax(320px,3fr)] lg:items-start [&>*]:min-w-0">
-        <div className="grid min-w-0 gap-5 [&>*]:min-w-0">
-          <Card className="p-3 sm:p-3">
+      {/* 7 : 3 and as tall as the window. Left: the picture with its player bar, and the timeline. Right: a rail of icons, one panel. */}
+      <div className="grid min-h-0 flex-1 gap-2 lg:grid-cols-[minmax(0,7fr)_minmax(340px,3fr)] [&>*]:min-w-0">
+        <div className="flex min-h-0 flex-col gap-2 [&>*]:min-w-0">
+          <Card className="h-[48vh] min-h-[220px] p-2 sm:p-2 lg:h-auto lg:min-h-0 lg:flex-[3]">
             <VideoPanel
               project={p}
               videoRef={videoRef}
@@ -251,13 +284,21 @@ export function ProjectView({ id }: { id: string }) {
               outTime={clipPlay.T}
               srcId={loadedSrc}
               edited={tl.edited}
+              playing={playing}
+              volume={volume}
+              muted={muted}
+              onVolume={setVolume}
+              onMuted={setMuted}
+              onTogglePlay={togglePlay}
+              scrub={view === "source" && tl.edited ? { value: clipPlay.T, max: totalLen(tl.clips), seek: clipPlay.seekOut } : undefined}
               onSeek={seek}
               onTime={setTime}
               onLoaded={onLoaded}
             />
           </Card>
-          <Card className="gap-0 overflow-hidden p-0">
-            <TimelinePanel
+          <Card className="gap-0 overflow-hidden p-0 lg:min-h-0 lg:flex-[2]">
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <TimelinePanel
                 project={p}
                 tl={tl}
                 overlays={overlays}
@@ -268,7 +309,7 @@ export function ProjectView({ id }: { id: string }) {
                 T={clipPlay.T}
                 playing={playing}
                 showPlayhead={view === "source"}
-                disabled={busy && RENDER_STAGES.includes(p.status.stage)}
+                disabled={locked}
                 onSeekOut={(t) => {
                   if (view === "source") { clipPlay.seekOut(t); return; }
                   // an exported video is showing: go back to the original at that point
@@ -288,38 +329,19 @@ export function ProjectView({ id }: { id: string }) {
                 onTogglePlay={togglePlay}
                 onApply={apply}
               />
+            </div>
           </Card>
         </div>
 
-        <div className="grid min-w-0 gap-5 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:grid-rows-[auto_minmax(0,1fr)] [&>*]:min-w-0">
-          <ExportPanel
-            project={p}
-            previewAt={outAt}
-            onSaveToFolder={async () => { await run(() => api.saveToFolder(id)); }}
-            onRetry={() => run(() => api.retry(id))}
-            onCancel={() => run(() => api.cancel(id))}
-            onPreview={() => { pendingShow.current = "preview"; run(async () => { await tl.flush(); await overlays.flush(); return api.render(id, outAt); }); }}
-            onRender={() => { pendingShow.current = "final"; run(async () => { await tl.flush(); await overlays.flush(); return api.render(id, null); }); }}
-            onJump={(i) => {
-              setTab("lines");
-              seekAt(p.segments[i].src_id ?? 0, p.segments[i].start + 0.01);
-              setTimeout(() => {
-                const row = document.querySelector<HTMLElement>(`[data-idx="${i}"]`);
-                row?.scrollIntoView({ block: "center", behavior: "smooth" });
-                row?.querySelector("textarea")?.focus({ preventScroll: true });
-              }, 60);
-            }}
-          />
-        <Card className="min-w-0 gap-0 overflow-hidden p-0 lg:min-h-0">
-          <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col gap-0">
-            <div className="border-b px-4 py-3">
-              <TabsList className="w-full">
-                <TabsTrigger value="settings" className="min-w-0 flex-1 px-2"><SlidersHorizontal /> <span className="truncate">Cài đặt</span></TabsTrigger>
-                <TabsTrigger value="lines" className="min-w-0 flex-1 px-2"><Languages /> <span className="truncate">Bản dịch{p.segments.length ? ` (${p.segments.length})` : ""}</span></TabsTrigger>
-                <TabsTrigger value="publish" className="min-w-0 flex-1 px-2"><Send /> <span className="truncate">Đăng Reels</span></TabsTrigger>
-              </TabsList>
-            </div>
-            <TabsContent value="lines" className="min-h-0 flex-1 overflow-y-auto">
+        <Card className="h-[70vh] min-w-0 flex-row gap-0 overflow-hidden p-0 lg:h-auto lg:min-h-0">
+          <nav aria-label="Các mục" className="flex w-11 shrink-0 flex-col items-center gap-1 overflow-y-auto border-r bg-muted/30 py-2">
+            {RAIL.map((r) => (
+              <IconButton key={r.id} label={r.label} active={tab === r.id} onClick={() => setTab(r.id)}>{r.icon}</IconButton>
+            ))}
+          </nav>
+          <div className="relative min-h-0 min-w-0 flex-1">
+            {/* every panel stays mounted (just hidden) so unsaved edits and drafts survive switching */}
+            <div className="h-full overflow-y-auto" hidden={tab !== "lines"}>
               <SegmentList
                 project={p}
                 activeIdx={activeIdx}
@@ -329,23 +351,26 @@ export function ProjectView({ id }: { id: string }) {
                 onRegen={onRegen}
                 onPlay={onPlay}
               />
-            </TabsContent>
-            <TabsContent value="settings" className="min-h-0 flex-1 overflow-y-auto">
+            </div>
+            <div className="h-full" hidden={!sectionTab}>
               <SettingsPanel
                 projectId={id}
+                section={sectionTab ?? "script"}
+                handle={settingsRef}
+                sourceLangs={cfg?.langs ?? {}}
+                langLocked={p.segments.length > 0 || (busy && !locked)}
                 previewAt={previewAt}
                 subStyles={cfg?.sub_styles ?? {}}
                 reviewStyles={cfg?.review_styles ?? {}}
                 targetLangs={cfg?.target_langs ?? {}}
                 translatedTo={p.translated_to ?? "vi"}
-                onRewrite={async () => { await run(() => api.rewrite(id)); }}
                 settings={p.settings}
                 voices={cfg?.voices ?? {}}
                 canDemucs={cfg?.features.demucs ?? false}
-                disabled={busy && RENDER_STAGES.includes(p.status.stage)}
+                disabled={locked}
                 busy={busy}
                 onDraft={setDraft}
-                onSave={async (patch) => { await onSettings(patch); setDraft(null); }}
+                onSave={async (patch) => { apply(await api.settings(id, patch)); setDraft(null); }}
                 maskDetect={p.mask_detect}
                 onDetect={async () => {
                   await run(async () => {
@@ -356,13 +381,12 @@ export function ProjectView({ id }: { id: string }) {
                   setDraft(null);
                 }}
               />
-            </TabsContent>
-            <TabsContent value="publish" className="min-h-0 flex-1 overflow-y-auto">
+            </div>
+            <div className="h-full overflow-y-auto" hidden={tab !== "publish"}>
               <PublishPanel project={p} time={previewAt} apply={apply} />
-            </TabsContent>
-          </Tabs>
+            </div>
+          </div>
         </Card>
-        </div>
       </div>
     </div>
   );

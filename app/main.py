@@ -353,7 +353,7 @@ def list_projects():
 
 
 @app.post("/api/projects/upload")
-def upload(file: UploadFile = File(...), settings: str = Form("{}"), auto_render: bool = Form(False)):
+def upload(file: UploadFile = File(...), settings: str = Form("{}"), auto_render: bool = Form(False), start: bool = Form(True)):
     ext = Path(file.filename or "").suffix.lower()
     if ext not in VIDEO_EXT:
         raise HTTPException(400, f"Định dạng {ext or '?'} không hỗ trợ. Dùng mp4, mov, webm, mkv.")
@@ -382,8 +382,39 @@ def upload(file: UploadFile = File(...), settings: str = Form("{}"), auto_render
     except BaseException:
         store.delete(p["id"])
         raise
+    if not start:
+        # waits for the user to choose the languages and the voice in the project, then POST .../start
+        try:
+            info = media.probe(dst)
+            if info["duration"] > MAX_DURATION_MIN * 60:
+                raise MediaError(f"Video dài {info['duration'] / 60:.1f} phút, vượt giới hạn {MAX_DURATION_MIN:g} phút.")
+            if not info["has_audio"]:
+                raise MediaError("Video không có âm thanh, không có gì để nhận dạng.")
+        except MediaError as e:
+            store.delete(p["id"])
+            raise HTTPException(400, str(e))
+
+        def hold(q):
+            q["media"] = info
+            q["status"] = {"stage": "new", "progress": None, "message": "Chọn ngôn ngữ và giọng đọc, rồi bấm Bắt đầu.",
+                           "error": None}
+        store.update(p["id"], hold)
+        return _view(store.load(p["id"]))
     jobs.submit_prepare(p["id"])
     return _view(store.load(p["id"]))
+
+
+@app.post("/api/projects/{pid}/start")
+def start_project(pid: str, body: dict = Body({})):
+    """Begin recognising and translating a video that was imported but not started yet."""
+    p = _load(pid)
+    _not_busy(pid)
+    if p["status"]["stage"] != "new":
+        raise HTTPException(400, "Dự án đã bắt đầu rồi.")
+    store.update(pid, lambda q: q.__setitem__("auto_render", bool(body.get("auto_render"))))
+    store.set_status(pid, "queued", 0, "Đang chờ xử lý…")
+    jobs.submit_prepare(pid)
+    return _view(store.load(pid))
 
 
 @app.post("/api/projects/url")
@@ -740,6 +771,8 @@ def add_source(pid: str, file: UploadFile = File(...)):
     _not_busy(pid)
     if not p.get("media"):
         raise HTTPException(400, "Video chính chưa sẵn sàng.")
+    if p["status"]["stage"] == "new":
+        raise HTTPException(409, "Bấm Bắt đầu cho video chính trước, rồi mới thêm video khác.")
     ext = Path(file.filename or "").suffix.lower()
     if ext not in VIDEO_EXT:
         raise HTTPException(400, f"Định dạng {ext or '?'} không hỗ trợ. Dùng mp4, mov, webm, mkv.")
@@ -799,6 +832,8 @@ def retry_source(pid: str, src: int):
     """Recognise and translate an added video again (it failed or was cancelled)."""
     p = _load(pid)
     _not_busy(pid)
+    if p["status"]["stage"] == "new":
+        raise HTTPException(409, "Bấm Bắt đầu cho video chính trước.")
     if not any(x["id"] == src for x in timeline.extra_sources(p)):
         raise HTTPException(404, "Không có video này trong dự án.")
     prev = p["status"]

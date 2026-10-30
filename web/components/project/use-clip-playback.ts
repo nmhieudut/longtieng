@@ -27,10 +27,12 @@ export function useClipPlayback(opts: {
   active: boolean;           // the original video is shown (the exported ones already are the edited video)
   playing: boolean;
   time: number;              // time in the loaded file, as last reported by the video
+  volume: number;            // the player's own volume (0..1), multiplied with the clip's
+  muted: boolean;
   onJump: (t: number) => void;                                                         // same file: seek
   onSwitch: (src: number, t: number, autoplay: boolean) => void;                       // another file: load, then seek
 }) {
-  const { videoRef, clips, loaded, active, playing, time, onJump, onSwitch } = opts;
+  const { videoRef, clips, loaded, active, playing, time, volume, muted, onJump, onSwitch } = opts;
   const [idx, setIdx] = useState(0);
   const live = useRef({ clips, idx, loaded });
   const wasActive = useRef(false);
@@ -84,16 +86,19 @@ export function useClipPlayback(opts: {
   // the video element plays the clip at its speed and volume; anything else (exports, no edit) plays normally
   const cur = clips[Math.min(idx, Math.max(0, clips.length - 1))];
   const rate = active && cur ? cur.speed || 1 : 1;
-  const vol = active && cur ? Math.min(1, cur.volume ?? 1) : 1;  // a player cannot go above 100%
+  const vol = Math.min(1, (active && cur ? cur.volume ?? 1 : 1) * volume);  // a player cannot go above 100%
   // (re-applied on every time update: a newly loaded file starts again at normal speed and volume)
   useEffect(() => {
     const v = videoRef.current;
-    if (v && active) { v.playbackRate = rate; v.volume = vol; }
-  }, [videoRef, active, rate, vol, playing, time, loaded]);
+    if (!v) return;
+    v.volume = vol;
+    v.muted = muted;
+    if (active) v.playbackRate = rate;
+  }, [videoRef, active, rate, vol, muted, playing, time, loaded]);
   useEffect(() => {  // once, when the timeline lets go of the player; never touches a video nobody edited
     if (active) return;
     const v = videoRef.current;
-    if (v && (v.playbackRate !== 1 || v.volume !== 1) && wasActive.current) { v.playbackRate = 1; v.volume = 1; }
+    if (v && v.playbackRate !== 1 && wasActive.current) v.playbackRate = 1;
     wasActive.current = false;
   }, [videoRef, active]);
   useEffect(() => { if (active) wasActive.current = true; }, [active]);

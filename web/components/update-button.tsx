@@ -60,7 +60,7 @@ export function UpdateButton() {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon" aria-label="Kiểm tra bản mới" disabled={checking} onClick={checkNow}>
+          <Button variant="ghost" size="icon-sm" aria-label="Kiểm tra bản mới" disabled={checking} onClick={checkNow}>
             <RefreshCw className={checking ? "size-4 animate-spin" : "size-4"} />
           </Button>
         </TooltipTrigger>

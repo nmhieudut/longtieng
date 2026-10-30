@@ -57,7 +57,7 @@ export type Overlay = {
 };
 
 export type Stage =
-  | "queued" | "downloading" | "extracting" | "model" | "transcribing" | "detecting" | "translating"
+  | "new" | "queued" | "downloading" | "extracting" | "model" | "transcribing" | "detecting" | "translating"
   | "review" | "dubbing" | "separating" | "rendering" | "done" | "error";
 
 export type Caption = { title: string; description: string; hashtags: string[] };
@@ -157,7 +157,7 @@ export const ACTIVE: ReadonlySet<Stage> = new Set([
 export const isActive = (p: Pick<Project, "status"> & { busy?: boolean }) => !!p.busy || ACTIVE.has(p.status.stage);
 
 export const STAGE_LABEL: Record<Stage, string> = {
-  queued: "Đang chờ", downloading: "Đang tải", extracting: "Tách âm", model: "Tải model",
+  new: "Chưa bắt đầu", queued: "Đang chờ", downloading: "Đang tải", extracting: "Tách âm", model: "Tải model",
   transcribing: "Nhận dạng", detecting: "Dò phụ đề", translating: "Đang dịch", review: "Chờ duyệt", dubbing: "Lồng tiếng",
   separating: "Tách nhạc", rendering: "Đang xuất", done: "Hoàn tất", error: "Lỗi",
 };
@@ -197,6 +197,8 @@ export const api = {
   filmstrip: (id: string, src = 0) => req<Project>(`${P(id)}/filmstrip?src=${src}`, { method: "POST" }),
   retrySource: (id: string, src: number) => req<Project>(`${P(id)}/sources/${src}/retry`, { method: "POST" }),
   deleteSource: (id: string, src: number) => req<Project>(`${P(id)}/sources/${src}`, { method: "DELETE" }),
+  start: (id: string, autoRender = false) =>
+    req<Project>(`${P(id)}/start`, { method: "POST", body: { auto_render: autoRender } }),
   rewrite: (id: string) => req<Project>(`${P(id)}/rewrite`, { method: "POST" }),
   saveDefaults: (settings: Settings) => req<{ ok: boolean }>("/api/default-settings", { method: "PUT", body: { settings } }),
   resetDefaults: () => req<{ ok: boolean }>("/api/default-settings", { method: "DELETE" }),
@@ -260,12 +262,13 @@ export const fileUrl = (id: string, rel: string, v?: number | string) =>
 
 // XHR rather than fetch: fetch has no upload progress
 export function upload(file: File, settings: Partial<Settings>, onProgress: (x: number) => void,
-  autoRender = false): Promise<Project> {
+  autoRender = false, start = true): Promise<Project> {
   return new Promise((resolve, reject) => {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("settings", JSON.stringify(settings));
     fd.append("auto_render", autoRender ? "true" : "false");
+    fd.append("start", start ? "true" : "false");
     const x = new XMLHttpRequest();
     x.open("POST", "/api/projects/upload");
     x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);

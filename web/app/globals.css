@@ -148,6 +148,7 @@
   }
   html {
     @apply font-sans;
+    font-size: 14px;  /* was 16px: every size and gap is in rem, so the whole app gets denser */
   }
 }
 @keyframes indet {

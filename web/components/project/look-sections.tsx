@@ -1,13 +1,9 @@
 "use client";
 
-import { Crop, ImagePlus, Loader2, Palette, RotateCcw, Sparkles, Stamp, Trash2, Wand2 } from "lucide-react";
+import { Crop, ImagePlus, Loader2, Palette, RotateCcw, Sparkles, Stamp, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
-  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -190,31 +186,41 @@ export function LogoSection({ s, disabled, change }: { s: Settings; disabled: bo
 }
 
 /** Faithful translation or AI narration ("review") in a chosen style, plus "rewrite now". */
-export function ScriptSection({ s, styles, targetLangs, translatedTo, disabled, busy: jobBusy, change, onRewrite }: {
+export function ScriptSection({ s, styles, targetLangs, sourceLangs, langLocked, translatedTo, disabled, change }: {
   s: Settings; styles: Record<string, string>; targetLangs: Record<string, { label: string; voice: string }>;
-  translatedTo: string; disabled: boolean; busy: boolean; change: Change;
-  onRewrite: () => Promise<void>;
+  sourceLangs: Record<string, string>; langLocked: boolean;   // the spoken language only matters until recognition has run
+  translatedTo: string; disabled: boolean; change: Change;
 }) {
   const sc = s.script;
-  const [busy, setBusy] = useState(false);
-  const stale = translatedTo !== s.target;
+  const stale = langLocked && translatedTo !== s.target;
   const label = (k: string) => targetLangs[k]?.label ?? k;
   const lower = (k: string) => label(k).replace(/^Tiếng/, "tiếng");  // "Tiếng Việt" -> "tiếng Việt" inside a sentence
   return (
-    <Section value="script" icon={<Sparkles />} title="Lời thoại"
-      summary={`${label(s.target)} · ${sc.mode === "review" ? `Review AI · ${styles[sc.style] ?? sc.style}` : "Dịch sát nghĩa"}`}>
-      <Field label="Lồng tiếng sang">
-        <Select value={s.target} disabled={disabled}
-          onValueChange={(t) => change({ target: t, voice: targetLangs[t]?.voice ?? s.voice })}>
-          <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {Object.entries(targetLangs).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </Field>
+    <Section value="script" icon={<Sparkles />} title="Ngôn ngữ & lời thoại"
+      summary={`${sourceLangs[s.lang] ?? s.lang} → ${label(s.target)} · ${sc.mode === "review" ? `Review AI · ${styles[sc.style] ?? sc.style}` : "Dịch sát nghĩa"}`}>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Ngôn ngữ trong video">
+          <Select value={s.lang} disabled={disabled || langLocked} onValueChange={(v) => change({ lang: v })}>
+            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {Object.entries(sourceLangs).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field label="Lồng tiếng sang">
+          <Select value={s.target} disabled={disabled}
+            onValueChange={(t) => change({ target: t, voice: targetLangs[t]?.voice ?? s.voice })}>
+            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {Object.entries(targetLangs).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </Field>
+      </div>
+      {langLocked && <p className="text-xs text-muted-foreground">Video đã được nhận dạng nên không đổi ngôn ngữ gốc được nữa. Muốn nhận dạng lại, nhập video này lần nữa.</p>}
       {stale && (
         <p className="rounded-lg border border-fast/40 bg-fast/10 px-3 py-2 text-xs text-fast-foreground">
-          Lời thoại hiện là {lower(translatedTo)}. Bấm “Viết lại lời thoại” bên dưới để dịch sang{" "}
+          Lời thoại hiện là {lower(translatedTo)}. Bấm nút đũa phép “Viết lại lời thoại” ở thanh trên để dịch sang{" "}
           {lower(s.target)}; chưa viết lại thì chưa xuất video được. Giọng đọc đã tự đổi theo ngôn ngữ mới.
         </p>
       )}
@@ -237,27 +243,8 @@ export function ScriptSection({ s, styles, targetLangs, translatedTo, disabled, 
         {sc.mode === "review"
           ? "AI viết lại thành lời dẫn kể chuyện theo phong cách đã chọn, vừa khít thời lượng từng đoạn. Cần OpenAI API key."
           : "Dịch đúng lời nhân vật nói."}
+        {" "}Đổi chế độ hoặc ngôn ngữ xong thì bấm nút đũa phép ở thanh trên để viết lại (khi đã có lời thoại).
       </p>
-      <AlertDialog>
-        <AlertDialogTrigger asChild>
-          <Button variant="outline" disabled={jobBusy || busy} className="justify-self-start"
-            title={jobBusy ? "Đợi video xử lý xong" : undefined}>
-            {busy ? <Loader2 className="animate-spin" /> : <Wand2 />} Viết lại lời thoại theo cài đặt này
-          </Button>
-        </AlertDialogTrigger>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Viết lại toàn bộ lời thoại?</AlertDialogTitle>
-            <AlertDialogDescription>Các câu bạn đã sửa tay sẽ bị thay bằng bản mới. Giọng đọc sẽ được tạo lại khi xuất.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Huỷ</AlertDialogCancel>
-            <AlertDialogAction onClick={async () => { setBusy(true); try { await onRewrite(); } finally { setBusy(false); } }}>
-              Viết lại
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </Section>
   );
 }

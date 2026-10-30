@@ -25,12 +25,12 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="vi" translate="no" suppressHydrationWarning className={`${sans.variable} ${display.variable} ${mono.variable} h-full antialiased`}>
-      <body className="min-h-full flex flex-col bg-background">
+    <html lang="vi" translate="no" suppressHydrationWarning className={`${sans.variable} ${display.variable} ${mono.variable} antialiased`}>
+      <body className="flex min-h-dvh flex-col bg-background lg:h-dvh lg:min-h-[700px] lg:min-w-[1000px]">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <TooltipProvider delayDuration={300}>
             <SiteHeader />
-            <main className="flex-1 w-full max-w-[1440px] mx-auto px-4 py-5 sm:px-6 sm:py-7">{children}</main>
+            <main className="flex min-h-0 w-full flex-1 flex-col px-3 py-3">{children}</main>
             <Toaster richColors position="top-center" />
             <DesktopBridge />
           </TooltipProvider>
