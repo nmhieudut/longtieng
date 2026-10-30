@@ -13,7 +13,7 @@ import { VoicePicker } from "@/components/voice-picker";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api, stillUrl, voicesFor } from "@/lib/api";
 
-import { FrameSection, LogoSection, ScriptSection, SubStylePicker } from "./look-sections";
+import { ColorSection, FrameSection, LogoSection, ScriptSection, SubStylePicker } from "./look-sections";
 import { MusicSection } from "./music-section";
 import { Field, Section, SliderField } from "./settings-ui";
 import type { DeepPartial, Project, Settings, VoiceInfo } from "@/lib/api";
@@ -191,6 +191,7 @@ export function SettingsPanel({
       </Section>
 
       <FrameSection s={s} disabled={disabled} change={change} preview={null} />
+      <ColorSection s={s} disabled={disabled} change={change} />
       <LogoSection s={s} disabled={disabled} change={change} />
 
       <Section
@@ -246,4 +247,4 @@ export function SettingsPanel({
   );
 }
 
-const NESTED = ["mask", "music", "frame", "logo", "script"] as const;
+const NESTED = ["mask", "music", "frame", "color", "logo", "script"] as const;

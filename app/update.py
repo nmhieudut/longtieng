@@ -63,12 +63,24 @@ def _set(**kw) -> None:
         _state.update(kw)
 
 
+_BUSY = ("downloading", "installing", "restarting")
+
+
+def _set_if_idle(**kw) -> None:
+    """Like _set, but never touches the state while an update is being installed. A check that was already
+    waiting on the network when Cập nhật was pressed would otherwise flip the stage back to "available" and a
+    second install would start on top of the first (seen in a real update.log)."""
+    with _lock:
+        if _state["stage"] not in _BUSY:
+            _state.update(kw)
+
+
 def check(force: bool = False) -> dict:
     """Ask GitHub for the newest release (at most every 30 min unless forced)."""
     if not enabled():
         return state()
     with _lock:
-        busy = _state["stage"] in ("downloading", "installing", "restarting")
+        busy = _state["stage"] in _BUSY
         fresh = time.time() - _state["checked_at"] < CHECK_EVERY
     if busy or (fresh and not force):
         return state()
@@ -77,14 +89,14 @@ def check(force: bool = False) -> dict:
         with urllib.request.urlopen(req, timeout=15) as r:
             latest = json.loads(r.read().decode())
     except Exception as e:
-        _set(checked_at=time.time(), stage="idle" if not force else "error",
+        _set_if_idle(checked_at=time.time(), stage="idle" if not force else "error",
              error=None if not force else f"Không kiểm tra được bản mới ({type(e).__name__}). Kiểm tra mạng rồi thử lại.")
         return state()
     if _ver(latest.get("version", "0")) <= _ver(APP_VERSION):
-        _set(checked_at=time.time(), stage="none", latest=latest, kind=None, error=None)
+        _set_if_idle(checked_at=time.time(), stage="none", latest=latest, kind=None, error=None)
         return state()
     kind = "patch" if latest.get("shell") == SHELL_VERSION and latest.get("patch") else "full"
-    _set(checked_at=time.time(), stage="available", latest=latest, kind=kind, error=None, progress=None)
+    _set_if_idle(checked_at=time.time(), stage="available", latest=latest, kind=kind, error=None, progress=None)
     return state()
 
 

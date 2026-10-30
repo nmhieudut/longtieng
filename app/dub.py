@@ -21,9 +21,14 @@ _edge_sem = threading.Semaphore(4)  # edge-tts is an unofficial endpoint; be gen
 
 
 def slot(segs: list[dict], i: int, duration: float) -> float:
-    """Seconds a line may use: from its start until the next line starts."""
-    nxt = segs[i + 1]["start"] if i + 1 < len(segs) else duration
-    return max(0.3, nxt - segs[i]["start"])
+    """Seconds a line may use: from its start until the next line of the same video starts.
+    `duration` is the main video's length; the lines of an added video (src_id > 0) end a second after their own end."""
+    vid = segs[i].get("src_id", 0)
+    for j in range(i + 1, len(segs)):
+        if segs[j].get("src_id", 0) == vid:
+            return max(0.3, segs[j]["start"] - segs[i]["start"])
+    end = duration if vid == 0 else segs[i]["end"] + 1.0
+    return max(0.3, end - segs[i]["start"])
 
 
 def classify(speech_secs: float, slot_secs: float, speed: float = 1.0) -> dict:
@@ -224,6 +229,7 @@ def make_line(proj_dir: Path, seg: dict, slot_secs: float, voice: str, rate: flo
             "text": text,
             "voice": voice,
             "rate": rate,
+            "slot": round(slot_secs, 2),  # what the speed was fitted to; a cut can make the slot shorter later
         },
         "fit": fit,
     }

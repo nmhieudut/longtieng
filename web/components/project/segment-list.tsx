@@ -14,7 +14,7 @@ type Props = {
   project: Project;
   activeIdx: number;
   playing: boolean;
-  onSeek: (t: number) => void;
+  onSeek: (t: number, srcId: number) => void;
   onSave: (sid: number, vi: string) => Promise<void>;
   onRegen: (sid: number) => Promise<void>;
   onPlay: (sid: number) => void;
@@ -102,11 +102,11 @@ const Row = memo(function Row({ seg, idx, slot, fresh, active, busy, onSeek, onS
     >
       <button
         type="button"
-        onClick={() => onSeek(seg.start + 0.01)}
+        onClick={() => onSeek(seg.start + 0.01, seg.src_id ?? 0)}
         className="h-fit rounded font-mono text-xs text-primary tabular-nums hover:underline"
         title="Nhảy tới câu này"
       >
-        {fmt(seg.start)}
+        {fmt(seg.start)}{(seg.src_id ?? 0) > 0 && <span className="ml-1 rounded bg-secondary px-1 text-[10px] text-secondary-foreground">Video {(seg.src_id ?? 0) + 1}</span>}
       </button>
       <p className="text-sm leading-relaxed text-muted-foreground">{seg.src}</p>
 

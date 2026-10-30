@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from . import dub, jobs, logos, media, music, ocr, outdir, publish, vieneu_tts, render, store, stt, translate, update
+from . import dub, jobs, logos, media, music, ocr, outdir, overlays, publish, vieneu_tts, render, store, stt, timeline, translate, update
 from .frame import ASPECTS
 from .media import MediaError
 from .config import (
@@ -137,9 +137,10 @@ def _refit(p: dict):
     if not media:
         return
     segs = p["segments"]
+    slot_of = jobs.slot_fn(p)[0]
     for i, s in enumerate(segs):
         if dub.needs_tts(s, st["voice"], st["rate"]):
-            s["fit"] = (dub.estimate(s["vi"], dub.slot(segs, i, media["duration"]), st["rate"], st["target"])
+            s["fit"] = (dub.estimate(s["vi"], slot_of(i), st["rate"], st["target"])
                         if s["vi"].strip() else None)
 
 
@@ -444,7 +445,7 @@ def patch_settings(pid: str, settings: dict = Body(...)):
         merged = p["settings"] | {k: v for k, v in settings.items() if k != "mask"}
         mask_patch = settings.get("mask") or {}
         merged["mask"] = p["settings"]["mask"] | mask_patch
-        for k in ("music", "frame", "logo", "script"):  # nested groups: patch field by field
+        for k in ("music", "frame", "color", "logo", "script"):  # nested groups: patch field by field
             merged[k] = (p["settings"].get(k) or {}) | (settings.get(k) or {})
         if set(mask_patch) & {"enabled", "bottom", "height"}:
             merged["mask"]["auto"] = False  # the user took over
@@ -621,6 +622,208 @@ def rewrite(pid: str):
     return _view(store.load(pid))
 
 
+@app.put("/api/projects/{pid}/timeline")
+def put_timeline(pid: str, body: dict = Body(...)):
+    """Save the edit list (cut / split / reorder / duplicate). {"clips": null} goes back to the whole video."""
+    p = _load(pid)
+    if not p.get("media"):
+        raise HTTPException(400, "Video chưa sẵn sàng.")
+    if jobs.busy(pid) and p["status"]["stage"] in RENDER_STAGES:
+        raise HTTPException(409, "Đang xuất video, đợi xong (hoặc bấm Huỷ) rồi sửa timeline.")
+    raw = body.get("clips")
+    try:
+        clips = (timeline.validate(raw, p["media"]["duration"], timeline.source_durations(p), MAX_DURATION_MIN * 60)
+                 if raw is not None else None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    def fn(q):
+        if clips is None or not timeline.is_edited(q | {"timeline": {"clips": clips}}):
+            q.pop("timeline", None)
+        else:
+            q["timeline"] = {"clips": clips}
+        q["edited_at"] = time.time()  # the exported video no longer matches
+    return _view(store.update(pid, fn))
+
+
+@app.put("/api/projects/{pid}/overlays")
+def put_overlays(pid: str, body: dict = Body(...)):
+    """Save the texts and picture stickers laid over the video (output time)."""
+    p = _load(pid)
+    if jobs.busy(pid) and p["status"]["stage"] in RENDER_STAGES:
+        raise HTTPException(409, "Đang xuất video, đợi xong (hoặc bấm Huỷ) rồi sửa.")
+    try:
+        items = overlays.validate(body.get("overlays"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    def fn(q):
+        if items:
+            q["overlays"] = items
+        else:
+            q.pop("overlays", None)
+        q["edited_at"] = time.time()
+    return _view(store.update(pid, fn))
+
+
+FILM_FRAMES = 48
+FILM_H = 54
+
+
+@app.post("/api/projects/{pid}/filmstrip")
+def make_filmstrip(pid: str, src: int = 0):
+    """One wide picture of frames spread over a video (0 = the main one), for the timeline. Made once, cached."""
+    from concurrent.futures import ThreadPoolExecutor
+    import tempfile
+
+    p = _load(pid)
+    if not p.get("media") or not p["source"].get("file"):
+        raise HTTPException(400, "Video chưa sẵn sàng.")
+    d = store.pdir(pid)
+    if src == 0:
+        m, rel, held = p["media"], p["source"]["file"], p.get("film")
+    else:
+        e = next((x for x in timeline.extra_sources(p) if x["id"] == src), None)
+        if not e:
+            raise HTTPException(404, "Không có video này trong dự án.")
+        m, rel, held = e, e["file"], e.get("film")
+    out = d / "thumbs" / ("film.jpg" if src == 0 else f"film_{src}.jpg")
+    w = max(2, round(FILM_H * m["width"] / m["height"] / 2) * 2)
+    info = {"n": FILM_FRAMES, "w": w, "h": FILM_H, "duration": m["duration"], "file": f"thumbs/{out.name}"}
+    if out.exists() and (held or {}).get("duration") == m["duration"]:
+        return _view(p)
+    out.parent.mkdir(exist_ok=True)
+    source = d / rel
+    with tempfile.TemporaryDirectory(dir=d) as tmp:
+        def grab(i):
+            t = (i + 0.5) * m["duration"] / FILM_FRAMES
+            f = Path(tmp) / f"{i:03d}.jpg"
+            return media.run([FFMPEG, "-y", "-v", "error", "-ss", f"{t:.2f}", "-i", str(source), "-frames:v", "1",
+                              "-vf", f"scale={w}:{FILM_H}", "-q:v", "5", str(f)], timeout=60)
+
+        try:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(grab, range(FILM_FRAMES)))
+            tmp_out = out.with_name(out.stem + ".part.jpg")
+            media.run([FFMPEG, "-y", "-v", "error", "-framerate", "1", "-i", str(Path(tmp) / "%03d.jpg"),
+                       "-vf", f"tile={FILM_FRAMES}x1", "-frames:v", "1", "-q:v", "5", str(tmp_out)], timeout=60)
+            tmp_out.replace(out)
+        except (MediaError, OSError) as e:
+            raise HTTPException(500, f"Không tạo được ảnh timeline: {e}")
+
+    def fn(q):
+        if src == 0:
+            q["film"] = info
+        else:
+            for x in q.get("extra_sources", []):
+                if x["id"] == src:
+                    x["film"] = info
+    return _view(store.update(pid, fn))
+
+
+MAX_EXTRA_SOURCES = 8
+
+
+def _add_clip(p: dict, entry: dict) -> list[dict]:
+    """The project's clips with the whole new video put at the end (ValueError if that makes it too long)."""
+    clips = timeline.clips_of(p) or [{"id": "full", "start": 0, "end": p["media"]["duration"]}]
+    clips = clips + [{"id": f"s{entry['id']}", "src": entry["id"], "start": 0, "end": entry["duration"]}]
+    durs = timeline.source_durations(p) | {entry["id"]: entry["duration"]}
+    return timeline.validate(clips, p["media"]["duration"], durs, MAX_DURATION_MIN * 60)
+
+
+@app.post("/api/projects/{pid}/sources")
+def add_source(pid: str, file: UploadFile = File(...)):
+    """Add another video to the project: it goes at the end of the timeline and its speech is recognised and
+    translated like the main video's."""
+    p = _load(pid)
+    _not_busy(pid)
+    if not p.get("media"):
+        raise HTTPException(400, "Video chính chưa sẵn sàng.")
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in VIDEO_EXT:
+        raise HTTPException(400, f"Định dạng {ext or '?'} không hỗ trợ. Dùng mp4, mov, webm, mkv.")
+    extras = timeline.extra_sources(p)
+    if len(extras) >= MAX_EXTRA_SOURCES:
+        raise HTTPException(400, f"Tối đa {MAX_EXTRA_SOURCES} video thêm vào một dự án.")
+    free = shutil.disk_usage(DATA_DIR).free
+    if free < 3 * 1024**3:
+        raise HTTPException(507, f"Ổ đĩa chỉ còn {free / 1024**3:.1f}GB trống, cần ít nhất 3GB. Dọn bớt rồi thử lại.")
+    n = max([e["id"] for e in extras] + [0]) + 1
+    d = store.pdir(pid)
+    dst = d / f"source_{n}{ext}"
+    limit, size = MAX_UPLOAD_MB * 1024 * 1024, 0
+    try:
+        with dst.open("wb") as f:
+            while chunk := file.file.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(413, f"File lớn hơn {MAX_UPLOAD_MB}MB.")
+                f.write(chunk)
+        info = media.probe(dst)
+        if info["duration"] > MAX_DURATION_MIN * 60:
+            raise HTTPException(400, f"Video dài {info['duration'] / 60:.1f} phút, vượt giới hạn {MAX_DURATION_MIN:g} phút.")
+        entry = {"id": n, "file": dst.name, "name": Path(file.filename or "video").stem[:80], "duration": info["duration"],
+                 "width": info["width"], "height": info["height"], "has_audio": info["has_audio"]}
+        # (checked again below on the timeline as it is when the upload has finished: it stays editable meanwhile)
+        _add_clip(p, entry)
+    except MediaError as e:
+        dst.unlink(missing_ok=True)
+        raise HTTPException(400, str(e))
+    except ValueError as e:
+        dst.unlink(missing_ok=True)
+        raise HTTPException(400, str(e))
+    except BaseException:
+        dst.unlink(missing_ok=True)
+        raise
+
+    def fn(q):
+        q["extra_sources"] = timeline.extra_sources(q) + [entry]
+        q["timeline"] = {"clips": _add_clip(q, entry)}   # from the CURRENT clips, so edits made during the upload stay
+        q["edited_at"] = time.time()
+    try:
+        store.update(pid, fn)
+    except ValueError as e:
+        dst.unlink(missing_ok=True)
+        raise HTTPException(400, str(e))
+    store.set_status(pid, "extracting", None, "Đang chuẩn bị video mới…")  # so the page starts following the job
+    try:
+        jobs.submit_extra(pid, n)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    return _view(store.load(pid))
+
+
+@app.delete("/api/projects/{pid}/sources/{src}")
+def delete_source(pid: str, src: int):
+    """Remove an added video with its lines and its clips."""
+    p = _load(pid)
+    _not_busy(pid)
+    e = next((x for x in timeline.extra_sources(p) if x["id"] == src), None)
+    if not e:
+        raise HTTPException(404, "Không có video này trong dự án.")
+
+    def fn(q):
+        q["extra_sources"] = [x for x in timeline.extra_sources(q) if x["id"] != src]
+        q["segments"] = [s for s in q["segments"] if s.get("src_id", 0) != src]
+        left = [c for c in timeline.clips_of(q) if c.get("src", 0) != src]
+        if left:
+            q["timeline"] = {"clips": left}
+        else:
+            q.pop("timeline", None)
+        if not q["extra_sources"] and not timeline.is_edited(q):
+            q.pop("timeline", None)
+        q["edited_at"] = time.time()
+    gone = [s["id"] for s in p["segments"] if s.get("src_id", 0) == src]
+    out = store.update(pid, fn)
+    for sid in gone:
+        for f in (store.pdir(pid) / "tts").glob(f"{sid}_*"):
+            f.unlink(missing_ok=True)
+    for f in (store.pdir(pid) / e["file"], store.pdir(pid) / f"audio16k_{src}.wav", store.pdir(pid) / "thumbs" / f"film_{src}.jpg"):
+        f.unlink(missing_ok=True)
+    return _view(out)
+
+
 @app.post("/api/projects/{pid}/render")
 def start_render(pid: str, preview_start: float | None = Body(None, embed=True)):
     p = _load(pid)
@@ -635,7 +838,8 @@ def start_render(pid: str, preview_start: float | None = Body(None, embed=True))
                                  f"{TARGET_LANGS[p['settings']['target']]['name']}: mở Cài đặt → Lời thoại và bấm "
                                  "“Viết lại lời thoại” trước khi xuất.")
     if preview_start is not None:
-        dur = p["media"]["duration"]
+        # output time: with cuts the video is shorter (or longer, with duplicates) than the source
+        dur = timeline.out_duration(timeline.clips_of(p)) if timeline.is_edited(p) else p["media"]["duration"]
         preview_start = min(max(0.0, float(preview_start)), max(0.0, dur - 1.0))
     prev = p["status"]
     store.set_status(pid, "dubbing", 0, "Đang chờ…")

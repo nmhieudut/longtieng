@@ -1,3 +1,4 @@
+import type { Clip } from "./timeline";
 export type FitStatus = "ok" | "fast" | "overflow";
 export type Fit = { status: FitStatus; need: number; speed: number; estimated?: boolean } | null;
 
@@ -9,6 +10,13 @@ export type Segment = {
   vi: string;
   tts: { file: string; ver: number; secs: number; text: string; voice: string; rate: number } | null;
   fit: Fit;
+  src_id?: number;  // which video the line belongs to (missing = the main one)
+};
+
+/** A video added to the project besides the main one. */
+export type ExtraSource = {
+  id: number; file: string; name: string; duration: number; width: number; height: number;
+  has_audio: boolean; lang?: string; film?: { n: number; w: number; h: number; duration: number; file: string };
 };
 
 export type Settings = {
@@ -24,12 +32,29 @@ export type Settings = {
   music: { track: string | null; volume: number; duck: boolean; start: number };
   mask: { enabled: boolean; auto: boolean; style: "blur" | "box"; bottom: number; height: number };
   frame: { aspect: "original" | "9:16" | "16:9" | "1:1" | "4:5"; fit: "blur" | "crop"; zoom: number };
+  color: { brightness: number; contrast: number; saturation: number; temperature: number; sharpness: number; vignette: number };
   logo: { image: string | null; text: string; position: "tl" | "tr" | "bl" | "br"; size: number; opacity: number };
   sub_style: string;
   script: { mode: "translate" | "review"; style: string };
 };
 
 export type Logo = { id: string; name: string; file: string };
+
+/** Text or picture laid over the exported video; times are seconds of the EDITED video. */
+export type Overlay = {
+  id: string;
+  kind: "text" | "image";
+  start: number;
+  end: number;
+  x: number;          // centre, 0..1 of the width
+  y: number;          // centre, 0..1 of the height
+  size: number;       // text: fraction of the short side; picture: fraction of the width
+  text?: string;
+  color?: string;     // #rrggbb
+  box?: boolean;      // dark box behind the letters
+  bold?: boolean;
+  image?: string;     // id in the logo library
+};
 
 export type Stage =
   | "queued" | "downloading" | "extracting" | "model" | "transcribing" | "detecting" | "translating"
@@ -58,6 +83,10 @@ export type Project = {
     cover?: { t: number; title: string; position: CoverPos; file: string; at: number };
   };
   mask_detect?: { found: boolean; bottom?: number; height?: number };
+  overlays?: Overlay[];
+  extra_sources?: ExtraSource[];
+  timeline?: { clips: Clip[] };  // missing = the whole video, uncut
+  film?: { n: number; w: number; h: number; duration: number; file: string };  // thumbnail strip for the timeline
   translated_to?: string; // language the lines are in now (missing = Vietnamese, from before this existed)
   outputs: Partial<Record<"preview" | "final" | "srt" | "json" | "txt", Output>> & { saved?: SavedCopy };
   busy: boolean;
@@ -161,6 +190,12 @@ export const api = {
   fromUrl: (url: string, settings: Partial<Settings>, autoRender = false) =>
     req<Project>("/api/projects/url", { method: "POST", body: { url, settings, auto_render: autoRender } }),
   saveToFolder: (id: string) => req<Project>(`${P(id)}/save-to-folder`, { method: "POST" }),
+  saveOverlays: (id: string, overlays: Overlay[]) =>
+    req<Project>(`${P(id)}/overlays`, { method: "PUT", body: { overlays } }),
+  saveTimeline: (id: string, clips: Clip[] | null) =>
+    req<Project>(`${P(id)}/timeline`, { method: "PUT", body: { clips } }),
+  filmstrip: (id: string, src = 0) => req<Project>(`${P(id)}/filmstrip?src=${src}`, { method: "POST" }),
+  deleteSource: (id: string, src: number) => req<Project>(`${P(id)}/sources/${src}`, { method: "DELETE" }),
   rewrite: (id: string) => req<Project>(`${P(id)}/rewrite`, { method: "POST" }),
   saveDefaults: (settings: Settings) => req<{ ok: boolean }>("/api/default-settings", { method: "PUT", body: { settings } }),
   resetDefaults: () => req<{ ok: boolean }>("/api/default-settings", { method: "DELETE" }),
@@ -282,3 +317,22 @@ export async function copyText(text: string) {
 
 export const fullCaption = (c: Caption) =>
   [c.title, c.description, c.hashtags.join(" ")].filter((x) => x.trim()).join("\n\n");
+
+/** Add another video to a project's timeline (XHR for the upload progress). */
+export function addSource(id: string, file: File, onProgress: (x: number) => void): Promise<Project> {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const x = new XMLHttpRequest();
+    x.open("POST", `/api/projects/${id}/sources`);
+    x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    x.onload = () => {
+      let d: { detail?: string } = {};
+      try { d = JSON.parse(x.responseText); } catch {}
+      if (x.status < 300) resolve(d as Project);
+      else reject(new Error(d.detail || `Lỗi ${x.status}`));
+    };
+    x.onerror = () => reject(new Error("Mất kết nối khi tải lên."));
+    x.send(fd);
+  });
+}

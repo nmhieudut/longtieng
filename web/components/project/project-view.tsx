@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Languages, Send, SlidersHorizontal, WifiOff } from "lucide-react";
+import { ArrowLeft, Languages, Scissors, Send, SlidersHorizontal, WifiOff } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -17,7 +17,15 @@ import { ExportPanel } from "./export-panel";
 import { Steps } from "./steps";
 import { useProject } from "./use-project";
 import { PublishPanel } from "./publish-panel";
+import { TimelinePanel } from "./timeline-panel";
+import { useClipPlayback } from "./use-clip-playback";
+import { useOverlays } from "./use-overlays";
+import { locate, mapLines } from "@/lib/timeline";
+import { useTimeline } from "./use-timeline";
 import { VideoPanel, type VideoView } from "./video-panel";
+
+// the timeline hooks must run before the "still loading" early return; they never save without a real project
+const NO_PROJECT = { id: "", media: null, segments: [] } as unknown as Project;
 
 export function ProjectView({ id }: { id: string }) {
   const { project: p, error, apply, offline } = useProject(id);
@@ -30,6 +38,8 @@ export function ProjectView({ id }: { id: string }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pendingShow = useRef<"preview" | "final" | null>(null);
   const pendingSeek = useRef<number | null>(null);
+  const autoplayNext = useRef(false);
+  const [playSrc, setPlaySrc] = useState(0);   // which video file the player has loaded (0 = the main one)
   const seenOutputs = useRef<Project["outputs"] | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
 
@@ -47,19 +57,57 @@ export function ProjectView({ id }: { id: string }) {
     }
   }, [p]);
 
+  // a video that was removed from the project can no longer be the loaded one
+  const loadedSrc = !p || playSrc === 0 || p.extra_sources?.some((e) => e.id === playSrc) ? playSrc : 0;
   const src = useMemo(() => {
-    const file = p?.source.file;
+    const file = loadedSrc === 0 ? p?.source.file : p?.extra_sources?.find((e) => e.id === loadedSrc)?.file;
     if (!p || !file) return null;
     const o = view === "source" ? undefined : p.outputs[view];
     return o ? fileUrl(p.id, o.file, o.at) : fileUrl(p.id, file);
-  }, [p, view]);
+  }, [p, view, loadedSrc]);
+
+  // ---- timeline (cut / split / reorder / duplicate): the video element plays only the kept parts
+  const onTimelineError = useCallback((m: string) => toast.error(m), []);
+  const tl = useTimeline(p ?? NO_PROJECT, apply, onTimelineError);
+  const overlays = useOverlays(p ?? NO_PROJECT, apply, onTimelineError);
+  const jump = useCallback((t: number) => {
+    const v = videoRef.current;
+    if (v) v.currentTime = t;
+    setTime(t);
+  }, []);
+  // another video file is needed: load it, and go to `t` (and keep playing) once it has loaded
+  const switchTo = useCallback((srcId: number, t: number, autoplay: boolean) => {
+    pendingSeek.current = t;
+    autoplayNext.current = autoplay;
+    setPlaySrc(srcId);
+    setTime(t);
+  }, []);
+  const clipPlay = useClipPlayback({
+    videoRef, clips: tl.clips, loaded: loadedSrc, active: view === "source" && tl.edited, playing, time,
+    onJump: jump, onSwitch: switchTo,
+  });
+  const togglePlay = useCallback(() => {
+    const v = videoRef.current;
+    if (v) { if (v.paused) v.play().catch(() => {}); else v.pause(); }
+  }, []);
 
   // keep position when switching between the original and the dubbed video (same timeline)
   const keepTime = useRef(0);
   const changeView = useCallback((v: VideoView) => {
-    keepTime.current = view !== "preview" && v !== "preview" ? (videoRef.current?.currentTime ?? 0) : 0;
+    const here = videoRef.current?.currentTime ?? 0;
+    if (tl.edited && view !== "preview" && v !== "preview" && view !== v) {
+      // original <-> exported: one is in source time, the other in output time
+      if (view === "source") keepTime.current = clipPlay.T;
+      else {
+        const at = locate(tl.clips, here);
+        pendingSeek.current = at.src;
+        setPlaySrc(tl.clips[at.idx]?.src ?? 0);
+      }
+    } else {
+      keepTime.current = view !== "preview" && v !== "preview" && loadedSrc === 0 ? here : 0;
+    }
     setView(v);
-  }, [view]);
+  }, [view, loadedSrc, tl.edited, tl.clips, clipPlay.T]);
 
   const onLoaded = useCallback(() => {
     const v = videoRef.current;
@@ -68,6 +116,10 @@ export function ProjectView({ id }: { id: string }) {
     pendingSeek.current = null;
     keepTime.current = 0;
     if (t) v.currentTime = t;
+    if (autoplayNext.current) {
+      autoplayNext.current = false;
+      v.play().catch(() => {});
+    }
   }, []);
 
   useEffect(() => {
@@ -90,15 +142,28 @@ export function ProjectView({ id }: { id: string }) {
     setTime(t);
   }, [view]);
 
+  /** Go to second `t` of video `srcId`, loading that video first if another one is showing. */
+  const seekAt = useCallback((srcId: number, t: number) => {
+    if (view === "source" && srcId !== loadedSrc) { switchTo(srcId, t, false); return; }
+    if (view !== "source" && srcId !== loadedSrc) { pendingSeek.current = t; setPlaySrc(srcId); setView("source"); return; }
+    seek(t);
+  }, [view, loadedSrc, switchTo, seek]);
+
   const activeIdx = useMemo(() => {
     if (!p || view === "preview") return -1;
+    if (view === "final" && tl.edited) {
+      // the exported video is the edited one: `time` is output time, so compare with where each line landed
+      const placed = mapLines(tl.clips, p.segments.map((s, i) => ({ ...s, i })));
+      let idx = -1;
+      for (const l of placed) if (l.out0 <= time && l.out1 > time - 0.01) idx = l.i;
+      return idx;
+    }
     let idx = -1;
     for (let i = 0; i < p.segments.length; i++) {
-      if (p.segments[i].start <= time) idx = i;
-      else break;
+      if ((p.segments[i].src_id ?? 0) === loadedSrc && p.segments[i].start <= time) idx = i;
     }
     return idx;
-  }, [p, time, view]);
+  }, [p, time, view, loadedSrc, tl.edited, tl.clips]);
 
   const run = useCallback(async (fn: () => Promise<Project>) => {
     try { apply(await fn()); }
@@ -144,7 +209,8 @@ export function ProjectView({ id }: { id: string }) {
 
   const busy = isActive(p);
   const settings = draft ?? p.settings;
-  const previewAt = view === "preview" ? 0 : time;
+  const previewAt = view === "preview" || loadedSrc !== 0 ? 0 : time;   // main video time (still preview, cover)
+  const outAt = view === "preview" ? 0 : tl.edited && view === "source" ? clipPlay.T : time;  // output time (30 s preview)
 
   return (
     <div className="grid gap-5 [&>*]:min-w-0">
@@ -177,6 +243,11 @@ export function ProjectView({ id }: { id: string }) {
               time={time}
               activeIdx={activeIdx}
               mask={settings.mask}
+              color={settings.color}
+              overlays={view === "source" ? overlays.items : []}
+              outTime={clipPlay.T}
+              srcId={loadedSrc}
+              edited={tl.edited}
               onSeek={seek}
               onTime={setTime}
               onLoaded={onLoaded}
@@ -184,15 +255,15 @@ export function ProjectView({ id }: { id: string }) {
           </Card>
           <ExportPanel
             project={p}
-            previewAt={previewAt}
+            previewAt={outAt}
             onSaveToFolder={async () => { await run(() => api.saveToFolder(id)); }}
             onRetry={() => run(() => api.retry(id))}
             onCancel={() => run(() => api.cancel(id))}
-            onPreview={() => { pendingShow.current = "preview"; run(() => api.render(id, previewAt)); }}
-            onRender={() => { pendingShow.current = "final"; run(() => api.render(id, null)); }}
+            onPreview={() => { pendingShow.current = "preview"; run(async () => { await tl.flush(); await overlays.flush(); return api.render(id, outAt); }); }}
+            onRender={() => { pendingShow.current = "final"; run(async () => { await tl.flush(); await overlays.flush(); return api.render(id, null); }); }}
             onJump={(i) => {
               setTab("lines");
-              seek(p.segments[i].start + 0.01);
+              seekAt(p.segments[i].src_id ?? 0, p.segments[i].start + 0.01);
               setTimeout(() => {
                 const row = document.querySelector<HTMLElement>(`[data-idx="${i}"]`);
                 row?.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -208,6 +279,7 @@ export function ProjectView({ id }: { id: string }) {
               <TabsList className="w-full sm:w-auto">
                 <TabsTrigger value="lines"><Languages /> Bản dịch{p.segments.length ? ` (${p.segments.length})` : ""}</TabsTrigger>
                 <TabsTrigger value="settings"><SlidersHorizontal /> Cài đặt</TabsTrigger>
+                <TabsTrigger value="timeline"><Scissors /> Dựng phim</TabsTrigger>
                 <TabsTrigger value="publish"><Send /> Đăng Reels</TabsTrigger>
               </TabsList>
             </div>
@@ -216,7 +288,7 @@ export function ProjectView({ id }: { id: string }) {
                 project={p}
                 activeIdx={activeIdx}
                 playing={playing}
-                onSeek={seek}
+                onSeek={(t, srcId) => seekAt(srcId, t)}
                 onSave={onSave}
                 onRegen={onRegen}
                 onPlay={onPlay}
@@ -249,8 +321,40 @@ export function ProjectView({ id }: { id: string }) {
                 }}
               />
             </TabsContent>
+            <TabsContent value="timeline" className="min-h-0 flex-1 overflow-y-auto">
+              <TimelinePanel
+                project={p}
+                tl={tl}
+                overlays={overlays}
+                music={settings.music}
+                onMusic={(m) => onSettings({ music: m })}
+                idx={clipPlay.idx}
+                T={clipPlay.T}
+                playing={playing}
+                showPlayhead={view === "source"}
+                disabled={busy && RENDER_STAGES.includes(p.status.stage)}
+                onSeekOut={(t) => {
+                  if (view === "source") { clipPlay.seekOut(t); return; }
+                  // an exported video is showing: go back to the original at that point
+                  let acc = 0;
+                  let at = { src: 0, t: tl.clips[0]?.start ?? 0 };
+                  for (const c of tl.clips) {
+                    const l = (c.end - c.start) / (c.speed || 1);
+                    at = { src: c.src ?? 0, t: c.start + Math.min(Math.max(t - acc, 0), l) * (c.speed || 1) };
+                    if (t < acc + l) break;
+                    acc += l;
+                  }
+                  pendingSeek.current = at.t;
+                  setPlaySrc(at.src);
+                  setView("source");
+                }}
+                onSelectClip={clipPlay.setIdx}
+                onTogglePlay={togglePlay}
+                onApply={apply}
+              />
+            </TabsContent>
             <TabsContent value="publish" className="min-h-0 flex-1 overflow-y-auto">
-              <PublishPanel project={p} time={view === "preview" ? 0 : time} apply={apply} />
+              <PublishPanel project={p} time={previewAt} apply={apply} />
             </TabsContent>
           </Tabs>
         </Card>

@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 
 from . import cancel
+from . import overlays as ov
 from . import frame
 from .config import FFMPEG, SUB_FONT, fonts_rel, sub_font, target_info
 from .media import MediaError, extract_audio_full, probe_audio
@@ -146,7 +147,7 @@ def logo_text_style(st: dict, W: int, H: int) -> tuple[str, str] | None:
 
 
 def write_ass(segs, duration, media, st, path: Path, offset: float = 0.0, window: float | None = None,
-              subs: bool = True, only_at: float | None = None) -> None:
+              subs: bool = True, only_at: float | None = None, overlays: list[dict] | None = None) -> None:
     """Burned-in subtitles (+ the channel-name watermark). only_at: a single line for a still preview."""
     g = frame.geom(media, st["frame"])
     W, H = g["W"], g["H"]
@@ -171,6 +172,22 @@ def write_ass(segs, duration, media, st, path: Path, offset: float = 0.0, window
     if logo:
         styles.append(logo[0])
         rows.append(logo[1])
+    texts = [o for o in (overlays or []) if o["kind"] == "text" and only_at is None]
+    if texts:  # two looks: outlined letters, or letters on a dark box (the box is the style's "outline")
+        styles.append(f"Style: Over,{SUB_FONT},40,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,3,1,5,10,10,10,1")
+        styles.append(f"Style: OverBox,{SUB_FONT},40,&H00FFFFFF,&H000000FF,&H78000000,&H64000000,-1,0,0,0,100,100,0,0,3,10,0,5,10,10,10,1")
+    for o in texts:
+        span = ov.in_window(o, offset, window)
+        if span is None:
+            continue
+        fs = max(12, int(min(W, H) * o["size"]))
+        text = _clean(o["text"])
+        if any("\u2e80" <= ch <= "\u9fff" or "\uac00" <= ch <= "\ud7af" for ch in text):  # no spaces to break at
+            text = _wrap_cjk(text, max(4, int(W * 0.9 / (fs * 1.08))))
+        pad = max(4, fs // 5)
+        tags = (f"{{\\an5\\pos({int(W * o['x'])},{int(H * o['y'])})\\fs{fs}\\b{1 if o.get('bold', True) else 0}"
+                f"\\1c{ov.ass_color(o['color'])}\\bord{pad if o.get('box') else max(2, fs // 14)}}}")
+        rows.append(f"Dialogue: 2,{_ts_ass(span[0])},{_ts_ass(span[1])},{'OverBox' if o.get('box') else 'Over'},,0,0,0,,{tags}{text}")
     if subs and only_at is not None:
         lines = [s for s in segs if s["vi"].strip()]
         if lines:  # the line on screen at that moment, else the nearest one
@@ -206,6 +223,28 @@ def logo_filter(st: dict, g: dict, logo_in: str, v_in: str, v_out: str) -> str:
             f"{v_in}[lgo]overlay={x}:{y}:format=auto{v_out}")
 
 
+def color_active(c: dict) -> bool:
+    return any(c[k] for k in ("brightness", "contrast", "saturation", "temperature", "sharpness", "vignette"))
+
+
+def color_filter(c: dict, v_in: str, v_out: str) -> str:
+    """Brightness / contrast / saturation / warmth / sharpness / vignette as one ffmpeg filter chain.
+    The web page shows a rough live preview of the same numbers (web/lib/color.ts); the still preview is exact."""
+    parts = []
+    if c["brightness"] or c["contrast"] or c["saturation"]:
+        parts.append(f"eq=brightness={c['brightness'] / 100 * 0.2:.3f}:contrast={1 + c['contrast'] / 100 * 0.7:.3f}"
+                     f":saturation={1 + c['saturation'] / 100:.3f}")
+    t = c["temperature"] / 100  # warm = more red, less blue
+    if t:
+        parts.append(f"colorbalance=rs={t * 0.12:.3f}:rm={t * 0.25:.3f}:rh={t * 0.1:.3f}"
+                     f":bs={-t * 0.12:.3f}:bm={-t * 0.25:.3f}:bh={-t * 0.1:.3f}")
+    if c["sharpness"]:
+        parts.append(f"unsharp=5:5:{c['sharpness'] / 100 * 1.5:.2f}:5:5:0")
+    if c["vignette"]:
+        parts.append(f"vignette=angle={c['vignette'] / 100 * 1.5708:.3f}")
+    return f"{v_in}{','.join(parts)}{v_out}"
+
+
 def video_chain(proj: dict, ass: Path | None, cwd: Path, logo_in: str | None) -> tuple[list[str], str]:
     """Mask the original subtitles -> reframe -> burn subtitles/watermark -> logo. Returns (filters, label)."""
     st, media = proj["settings"], proj["media"]
@@ -217,6 +256,9 @@ def video_chain(proj: dict, ass: Path | None, cwd: Path, logo_in: str | None) ->
     if g["active"]:
         chain.append(frame.video_filter(g, v, "[vf]"))
         v = "[vf]"
+    if color_active(st["color"]):  # after reframing (cheaper, and the blurred background gets it too), before text
+        chain.append(color_filter(st["color"], v, "[vc]"))
+        v = "[vc]"
     if ass:
         chain.append(f"{v}subtitles=filename={ass.name}:fontsdir={fonts_rel(cwd)}[vs]")
         v = "[vs]"
@@ -254,14 +296,15 @@ def still(proj_dir: Path, proj: dict, t: float, out: Path, width: int | None = N
 
 def separate_background(proj_dir: Path, src: Path) -> Path:
     """demucs → background without vocals (cached per project)."""
-    out = proj_dir / "bg_demucs.wav"
+    tag = "" if src.name.startswith("source") else "_edit"  # an edited video (edit.mp4) has its own separation
+    out = proj_dir / f"bg_demucs{tag}.wav"
     if out.exists():
         return out
     try:
         import demucs  # noqa: F401
     except ImportError:
         raise MediaError("Chưa cài demucs. Chạy: uv sync --extra demucs  (hoặc chọn chế độ 'Giảm âm gốc').")
-    full = proj_dir / "audio_full.wav"
+    full = proj_dir / f"audio_full{tag}.wav"
     if not full.exists():
         extract_audio_full(src, full)
     tmp = proj_dir / "demucs_tmp"
@@ -313,14 +356,20 @@ def music_path(proj: dict) -> Path | None:
 
 
 def build_filters(proj_dir: Path, proj: dict, bg_label: str | None, start: float, length: float | None,
-                  music_label: str | None = None, logo_label: str | None = None) -> str:
+                  music_label: str | None = None, logo_label: str | None = None,
+                  overlay_imgs: list[tuple[str, dict]] | None = None) -> str:
     st, media = proj["settings"], proj["media"]
     ass = None
-    if st["subtitle_mode"] == "burn" or logo_text_style(st, 2, 2):
+    over = proj.get("overlays") or []
+    if st["subtitle_mode"] == "burn" or logo_text_style(st, 2, 2) or any(o["kind"] == "text" for o in over):
         ass = proj_dir / ("subs_preview.ass" if length else "subs.ass")
         write_ass(proj["segments"], media["duration"], media, st, ass, offset=start, window=length,
-                  subs=st["subtitle_mode"] == "burn")
+                  subs=st["subtitle_mode"] == "burn", overlays=over)
     chain, v = video_chain(proj, ass, proj_dir, f"[{logo_label}]" if logo_label else None)
+    if overlay_imgs:
+        g = frame.geom(media, st["frame"])
+        parts, v = ov.image_filters(overlay_imgs, v, g["W"], g["H"], start, length)
+        chain += parts
     if v == "[0:v]":
         chain.append("[0:v]null[vout]")
     else:
@@ -394,7 +443,16 @@ def render(proj_dir: Path, proj: dict, out: Path, bg: Path | None,
     if lp:
         logo_label = f"{sum(1 for x in cmd if x == '-i')}:v"
         cmd += ["-i", str(lp)]
-    filters = build_filters(proj_dir, proj, bg_label, start, length, music_label, logo_label)
+    overlay_imgs = []
+    from . import logos
+    for o in proj.get("overlays") or []:
+        if o["kind"] != "image" or ov.in_window(o, start, length) is None:
+            continue
+        item = logos.get(o["image"])
+        if item and logos.path(item).exists():
+            overlay_imgs.append((f"{sum(1 for x in cmd if x == '-i')}:v", o))
+            cmd += ["-i", str(logos.path(item))]
+    filters = build_filters(proj_dir, proj, bg_label, start, length, music_label, logo_label, overlay_imgs)
     cmd += ["-filter_complex", filters, "-map", "[vout]", "-map", "[aout]"]
     cmd += ["-t", f"{(length or media['duration']):.3f}"]
     cmd += ["-c:v", "libx264", "-preset", "ultrafast" if length else "veryfast", "-crf", "20",

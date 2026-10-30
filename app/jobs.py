@@ -5,7 +5,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 
-from . import cancel, dub, ocr, outdir, render, store, stt, translate, vieneu_tts
+from . import cancel, dub, ocr, outdir, render, store, stt, timeline, translate, vieneu_tts
 from .cancel import Cancelled
 from .config import MAX_DURATION_MIN
 from .media import MediaError, download_url, extract_audio_16k, probe
@@ -149,15 +149,30 @@ def submit_rewrite(pid: str):
     _submit(pid, _rewrite)
 
 
+def _lang_of(p: dict, src: int) -> str:
+    if src == 0:
+        return p.get("detected_lang") or p["settings"]["lang"]
+    e = next((x for x in timeline.extra_sources(p) if x["id"] == src), {})
+    return e.get("lang") or p["settings"]["lang"]
+
+
 def _rewrite(pid: str):
     p = store.load(pid)
     segs = [dict(s, vi="") for s in p["segments"]]
     mode = p["settings"]["script"]["mode"]
     label = "Đang viết lại lời dẫn…" if mode == "review" else "Đang dịch lại…"
     step(pid, "translating", 0, label)
-    warnings = translate.translate_all(
-        segs, p["media"]["duration"], p.get("detected_lang") or p["settings"]["lang"], p["settings"]["rate"],
-        lambda x: step(pid, "translating", x, label), script=p["settings"]["script"], target=p["settings"]["target"])
+    durs = timeline.source_durations(p)
+    # each video on its own: lengths of lines and the context sent to the AI only make sense within one video
+    groups: dict[int, list[dict]] = {}
+    for s in segs:
+        groups.setdefault(s.get("src_id", 0), []).append(s)
+    warnings: list[str] = []
+    for gi, (src, group) in enumerate(groups.items()):
+        warnings += translate.translate_all(
+            group, durs.get(src, p["media"]["duration"]), _lang_of(p, src), p["settings"]["rate"],
+            lambda x, gi=gi: step(pid, "translating", (gi + x) / len(groups), label),
+            script=p["settings"]["script"], target=p["settings"]["target"])
     dur = p["media"]["duration"]
     for i, s in enumerate(segs):
         s["fit"] = (dub.estimate(s["vi"], dub.slot(segs, i, dur), p["settings"]["rate"], p["settings"]["target"])
@@ -166,11 +181,74 @@ def _rewrite(pid: str):
     def fin(q):
         q["segments"] = segs  # old voice clips no longer match the text, so they get remade on export
         q["translated_to"] = p["settings"]["target"]
-        q["warnings"] = warnings
+        q["warnings"] = list(dict.fromkeys(warnings))
         q["edited_at"] = time.time()
         q["status"] = {"stage": "review", "progress": None,
                        "message": "Đã viết lại. Kiểm tra rồi bấm Lồng tiếng.", "error": None}
     store.update(pid, fin)
+
+
+# ---------- another video added to the timeline: recognise + translate its speech like the main one
+
+def submit_extra(pid: str, n: int):
+    _submit(pid, _prepare_extra, n)
+
+
+def _prepare_extra(pid: str, n: int):
+    d = store.pdir(pid)
+    p = store.load(pid)
+    info = next(e for e in timeline.extra_sources(p) if e["id"] == n)
+    st = p["settings"]
+    name = f"video {n + 1}"
+
+    def finish(msg: str, segs=None, lang=None, warnings=None):
+        def fin(q):
+            if segs:
+                q["segments"] = q["segments"] + segs
+            for e in q.get("extra_sources", []):
+                if e["id"] == n and lang:
+                    e["lang"] = lang
+            if warnings:
+                q["warnings"] = list(dict.fromkeys(q.get("warnings", []) + warnings))
+            q["edited_at"] = time.time()
+            q["status"] = {"stage": "review", "progress": None, "message": msg, "error": None}
+        store.update(pid, fin)
+
+    if not info.get("has_audio", True):
+        finish(f"Đã thêm {name}. Video này không có tiếng nên không có lời thoại.")
+        return
+    step(pid, "extracting", None, f"Đang tách âm thanh {name}…")
+    wav = d / f"audio16k_{n}.wav"
+    extract_audio_16k(d / info["file"], wav)
+    if not stt.model_cached():
+        msg = "Lần đầu chạy: đang tải model nhận dạng giọng (~1.6GB), chỉ tải một lần…"
+        step(pid, "model", None, msg)
+        stt.ensure_model(lambda f: step(pid, "model", f, msg))
+    step(pid, "transcribing", 0, f"Đang nhận dạng giọng nói {name}…")
+    last = [0.0]
+
+    def prog(x):
+        cancel.check(pid)
+        if x - last[0] >= 0.02 or x >= 1:
+            last[0] = x
+            step(pid, "transcribing", x, f"Đang nhận dạng giọng nói {name}…")
+
+    segs, lang = stt.transcribe(wav, st["lang"], prog)
+    if not segs:
+        finish(f"Đã thêm {name}. Không nhận dạng được câu thoại nào trong video này.", lang=lang)
+        return
+    step(pid, "translating", 0, f"Đang dịch {len(segs)} câu của {name}…")
+    warnings = translate.translate_all(
+        segs, info["duration"], lang, st["rate"],
+        lambda x: step(pid, "translating", x, f"Đang dịch {len(segs)} câu của {name}…"),
+        script=st.get("script"), target=st["target"])
+    base = max([s["id"] for s in p["segments"]] + [0])   # ids stay unique across all videos
+    for k, s in enumerate(segs, 1):
+        s["id"] = base + k
+        s["src_id"] = n
+    for i, s in enumerate(segs):
+        s["fit"] = dub.estimate(s["vi"], dub.slot(segs, i, info["duration"]), st["rate"], st["target"])
+    finish(f"Đã thêm {name}. Kiểm tra bản dịch rồi bấm Lồng tiếng.", segs, lang, warnings)
 
 
 def apply_mask_detection(pid: str, found: dict | None, force: bool = False) -> dict:
@@ -194,16 +272,41 @@ def submit_render(pid: str, preview_start: float | None):
     _submit(pid, _render, preview_start)
 
 
+def slot_fn(p: dict):
+    """(slot_of(i), in_export(seg)) for the lines of project `p`: the room each line has in the video that will be
+    exported (the edited one when there are cuts), and whether the line is part of that video at all."""
+    segs, dur = p["segments"], p["media"]["duration"]
+    if timeline.is_edited(p):
+        vslots = timeline.slots(timeline.clips_of(p), segs, dub.slot)
+        return (lambda i: vslots.get(segs[i]["id"], dub.slot(segs, i, dur))), (lambda s: s["id"] in vslots)
+    return (lambda i: dub.slot(segs, i, dur)), (lambda s: s.get("src_id", 0) == 0)
+
+
 def synth_missing(pid: str, on_progress=None) -> None:
     p = store.load(pid)
     st, dur = p["settings"], p["media"]["duration"]
     segs = p["segments"]
-    todo = [i for i, s in enumerate(segs) if dub.needs_tts(s, st["voice"], st["rate"])]
+    # with cuts, a line can land closer to the next one: fit its speed to the slot it has in the edited video,
+    # and don't pay for voices of lines that were cut out
+    slot_of, in_export = slot_fn(p)
+
+    def too_long_now(i):
+        t, s = segs[i].get("tts"), segs[i]
+        if not t or not s["vi"].strip():
+            return False
+        was = t.get("slot") or dub.slot(segs, i, dur)  # lines made before this existed were fitted to the original
+        shrank = slot_of(i) < was - 0.15 and t["secs"] > slot_of(i) * 1.02
+        # the edit was undone: a voice sped up for a short slot is slower than it needs to be
+        grew = slot_of(i) > was + 0.5 and ((s.get("fit") or {}).get("speed") or 1) > 1.01
+        return shrank or grew
+
+    todo = [i for i, s in enumerate(segs)
+            if in_export(s) and (dub.needs_tts(s, st["voice"], st["rate"]) or too_long_now(i))]
     done = [0]
 
     def one(i):
         cancel.check(pid)
-        res = dub.make_line(store.pdir(pid), segs[i], dub.slot(segs, i, dur), st["voice"], st["rate"])
+        res = dub.make_line(store.pdir(pid), segs[i], slot_of(i), st["voice"], st["rate"])
         sid = segs[i]["id"]
         text = segs[i]["vi"]
 
@@ -248,6 +351,10 @@ def _render(pid: str, preview_start: float | None):
     synth_missing(pid, lambda x: step(pid, "dubbing", x, "Đang tạo giọng lồng tiếng…"))
 
     p = store.load(pid)
+    if timeline.is_edited(p):
+        step(pid, "rendering", 0, "Đang cắt ghép video…")
+    # no edit: the project itself. Edited: a copy in output time (lines re-timed, edit.mp4 as the source)
+    p = timeline.virtual(d, p, lambda x: step(pid, "rendering", x, "Đang cắt ghép video…"))
     st, media = p["settings"], p["media"]
     dub.mix(d, p["segments"], media["duration"], d / "dub.wav")
 
@@ -303,7 +410,7 @@ def line_tts(pid: str, sid: int) -> dict:
     st, dur = p["settings"], p["media"]["duration"]
     segs = p["segments"]
     i = next(k for k, s in enumerate(segs) if s["id"] == sid)
-    res = dub.make_line(store.pdir(pid), segs[i], dub.slot(segs, i, dur), st["voice"], st["rate"])
+    res = dub.make_line(store.pdir(pid), segs[i], slot_fn(p)[0](i), st["voice"], st["rate"])
     text = segs[i]["vi"]
 
     def apply(q):

@@ -1,6 +1,6 @@
 "use client";
 
-import { Crop, ImagePlus, Loader2, Sparkles, Stamp, Trash2, Wand2 } from "lucide-react";
+import { Crop, ImagePlus, Loader2, Palette, RotateCcw, Sparkles, Stamp, Trash2, Wand2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { api, type DeepPartial, type Logo, logoUrl, type Settings } from "@/lib/api";
+import { COLOR_PRESETS, COLOR_ZERO, colorIsDefault, sameColor } from "@/lib/color";
 import { cn } from "@/lib/utils";
 
 import { Field, Section, SliderField } from "./settings-ui";
@@ -257,6 +258,48 @@ export function ScriptSection({ s, styles, targetLangs, translatedTo, disabled, 
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </Section>
+  );
+}
+
+/** Picture adjustments (brightness, contrast, ...) with one-tap looks. */
+export function ColorSection({ s, disabled, change }: { s: Settings; disabled: boolean; change: Change }) {
+  const c = s.color;
+  const preset = COLOR_PRESETS.find((p) => sameColor(p.values, c));
+  const show = (v: number) => `${v > 0 ? "+" : ""}${v}`;
+  const slider = (key: keyof Settings["color"], label: string, min: number) => (
+    <SliderField label={label} value={c[key]} min={min} max={100} step={1} disabled={disabled} show={show}
+      onChange={(v) => change({ color: { [key]: Math.round(v) } })} />
+  );
+  return (
+    <Section value="color" icon={<Palette />} title="Chỉnh màu"
+      summary={colorIsDefault(c) ? "Giữ nguyên" : preset ? preset.label : "Tuỳ chỉnh"}>
+      <div className="flex flex-wrap gap-1.5 p-1" role="radiogroup" aria-label="Bộ lọc màu">
+        {COLOR_PRESETS.map((p) => (
+          <button key={p.id} type="button" role="radio" aria-checked={preset?.id === p.id} disabled={disabled}
+            onClick={() => change({ color: { ...p.values } })}
+            className={cn("rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+              preset?.id === p.id ? "border-primary bg-primary/10 text-primary ring-1 ring-primary/40" : "hover:bg-accent",
+              disabled && "cursor-not-allowed opacity-60")}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+      {slider("brightness", "Độ sáng", -100)}
+      {slider("contrast", "Tương phản", -100)}
+      {slider("saturation", "Độ đậm màu", -100)}
+      {slider("temperature", "Nhiệt độ màu (lạnh ↔ ấm)", -100)}
+      {slider("sharpness", "Độ nét", 0)}
+      {slider("vignette", "Tối viền", 0)}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          Video gốc ở bên trái đổi màu ngay (gần đúng). Bấm “Xem ảnh khung hình xuất ra” để xem đúng như khi xuất.
+        </p>
+        <Button type="button" variant="outline" size="sm" disabled={disabled || colorIsDefault(c)}
+          onClick={() => change({ color: { ...COLOR_ZERO } })}>
+          <RotateCcw /> Về gốc
+        </Button>
+      </div>
     </Section>
   );
 }

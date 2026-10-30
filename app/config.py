@@ -319,6 +319,14 @@ DEFAULT_SETTINGS = {
         "fit": "blur",         # "blur": whole video on a blurred copy of itself | "crop": fill, cut the edges
         "zoom": 1.0,           # 1.0 – 2.0
     },
+    "color": {                 # picture adjustments, like a phone video editor; 0 = untouched
+        "brightness": 0,       # -100 .. 100
+        "contrast": 0,         # -100 .. 100
+        "saturation": 0,       # -100 .. 100 (-100 = black and white)
+        "temperature": 0,      # -100 (cool, blue) .. 100 (warm, orange)
+        "sharpness": 0,        # 0 .. 100
+        "vignette": 0,         # 0 .. 100 (darker corners)
+    },
     "logo": {
         "image": None,         # id in the shared logo library
         "text": "",            # or a channel name, e.g. "@kenhcuatoi"

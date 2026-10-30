@@ -173,7 +173,8 @@ def _pipeline(clip: Path) -> str:
             assert c.get("/api/config").status_code == 200
             with open(clip, "rb") as f:
                 r = c.post("/api/projects/upload", files={"file": ("selftest.mp4", f, "video/mp4")},
-                           data={"settings": '{"lang":"zh","voice":"google:vi"}'})
+                           data={"settings": '{"lang":"zh","voice":"google:vi","color":{"brightness":8,"contrast":10,"saturation":20,'
+                                        '"temperature":25,"sharpness":30,"vignette":30}}'})
             r.raise_for_status()
             pid = r.json()["id"]
             p = _wait(c, pid, {"review"}, 1800)
@@ -215,7 +216,60 @@ def _pipeline(clip: Path) -> str:
             r = c.get(f"/api/projects/{pid}/files/{p['outputs']['final']['file']}")
             if r.status_code != 200 or len(r.content) < 10_000:
                 raise RuntimeError("video tiếng Nhật xuất ra rỗng")
-            return f"final.mp4 {size_vi} KB, bản tiếng Nhật {len(r.content) // 1024} KB"
+            ja_kb = len(r.content) // 1024
+
+            # timeline: cut the middle out, repeat the opening part. The export must be exactly that long.
+            D = p["media"]["duration"]
+            # (the first part at 2x with a fade in, the second quieter with a fade out)
+            clips = [{"start": 0, "end": D * 0.4, "speed": 2, "fade_in": 0.2},
+                     {"start": D * 0.7, "end": D, "volume": 0.5, "fade_out": 0.3},
+                     {"start": 0, "end": D * 0.4}]
+            expect = D * 0.4 / 2 + D * 0.3 + D * 0.4
+            r = c.put(f"/api/projects/{pid}/timeline", json={"clips": clips})
+            r.raise_for_status()
+            c.post(f"/api/projects/{pid}/render", json={"preview_start": None}).raise_for_status()
+            p = _wait(c, pid, {"done"}, 900)
+            from app import cancel, config, store
+
+            out = store.pdir(pid) / "out" / "final.mp4"
+            pr = cancel.run([config.FFPROBE, "-v", "error", "-show_entries", "format=duration:stream=codec_type",
+                             "-of", "json", str(out)], timeout=60)
+            import json as _json
+
+            info = _json.loads(pr.stdout)
+            got = float(info["format"]["duration"])
+            kinds = {s_["codec_type"] for s_ in info["streams"]}
+            if abs(got - expect) > 0.8 or kinds != {"video", "audio"}:
+                raise RuntimeError(f"timeline: video dài {got:.1f}s (cần {expect:.1f}s), luồng {sorted(kinds)}")
+
+            # two more videos: one another size and without sound, one with speech (recognised and translated too)
+            home = clip.parent
+            silent = home / "silent.mp4"
+            r = cancel.run([config.FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=0x993333:s=320x240:r=30",
+                            "-t", "3", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(silent)], timeout=60)
+            if r.returncode != 0:
+                raise RuntimeError(r.stderr[-300:])
+            n_lines = len(p["segments"])
+            for path, name in ((silent, "silent.mp4"), (clip, "again.mp4")):
+                with open(path, "rb") as f:
+                    c.post(f"/api/projects/{pid}/sources", files={"file": (name, f, "video/mp4")}).raise_for_status()
+                p = _wait(c, pid, {"review"}, 900)
+            extra = p.get("extra_sources", [])
+            added = [s_ for s_ in p["segments"] if s_.get("src_id", 0) == 2]
+            ids = [s_["id"] for s_ in p["segments"]]
+            if len(extra) != 2 or not added or len(set(ids)) != len(ids) or len(p["segments"]) <= n_lines:
+                raise RuntimeError(f"ghép nhiều video: {len(extra)} video thêm, {len(added)} câu của video 2, id trùng={len(set(ids)) != len(ids)}")
+            expect2 = expect + 3.0 + extra[1]["duration"]
+            c.post(f"/api/projects/{pid}/render", json={"preview_start": None}).raise_for_status()
+            p = _wait(c, pid, {"done"}, 900)
+            pr = cancel.run([config.FFPROBE, "-v", "error", "-show_entries", "format=duration:stream=codec_type",
+                             "-of", "json", str(out)], timeout=60)
+            info = _json.loads(pr.stdout)
+            got2 = float(info["format"]["duration"])
+            kinds = {s_["codec_type"] for s_ in info["streams"]}
+            if abs(got2 - expect2) > 1.0 or kinds != {"video", "audio"}:
+                raise RuntimeError(f"ghép nhiều video: dài {got2:.1f}s (cần {expect2:.1f}s), luồng {sorted(kinds)}")
+            return f"final.mp4 {size_vi} KB, tiếng Nhật {ja_kb} KB, timeline {got:.1f}s, ghép 3 video {got2:.1f}s"
     finally:
         server.should_exit = True
 

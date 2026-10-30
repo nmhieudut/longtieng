@@ -5,7 +5,8 @@ import { type RefObject, useCallback, useEffect, useState } from "react";
 
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { fmt, type Project, type Settings } from "@/lib/api";
+import { fmt, type Overlay, type Project, type Settings } from "@/lib/api";
+import { colorIsDefault, cssFilter, vignetteOverlay, warmthOverlay } from "@/lib/color";
 import { cn } from "@/lib/utils";
 
 export type VideoView = "source" | "preview" | "final";
@@ -19,15 +20,24 @@ type Props = {
   time: number;
   activeIdx: number;
   mask: Settings["mask"];
+  color: Settings["color"];
+  srcId: number;           // which video file is loaded (0 = main)
+  edited: boolean;         // the timeline has cuts, so an exported video is in another time than the lines
+  overlays: Overlay[];     // texts and stickers (output time), shown roughly over the original video
+  outTime: number;         // playhead in output time
   onSeek: (t: number) => void;
   onTime: (t: number) => void;
   onLoaded: () => void;
 };
 
-export function VideoPanel({ project: p, videoRef, src, view, onView, time, activeIdx, mask, onSeek, onTime, onLoaded }: Props) {
+export function VideoPanel({ project: p, videoRef, src, view, onView, time, activeIdx, mask, color, srcId, edited, overlays, outTime, onSeek, onTime, onLoaded }: Props) {
   const box = useMaskBox(videoRef, src);
   const o = p.outputs;
-  const dur = p.media?.duration ?? 0;
+  const dur = srcId === 0 ? p.media?.duration ?? 0 : p.extra_sources?.find((e) => e.id === srcId)?.duration ?? 0;
+  // the exported videos already have the colours baked in; only the original is adjusted live
+  const live = view === "source" && !colorIsDefault(color);
+  const warm = live ? warmthOverlay(color) : null;
+  const vig = live ? vignetteOverlay(color) : null;
 
   return (
     <div className="grid gap-3">
@@ -40,12 +50,35 @@ export function VideoPanel({ project: p, videoRef, src, view, onView, time, acti
             playsInline
             preload="metadata"
             className="mx-auto block max-h-[44vh] w-full bg-black"
+            style={live ? { filter: cssFilter(color) } : undefined}
             onTimeUpdate={(e) => onTime(e.currentTarget.currentTime)}
             onLoadedMetadata={onLoaded}
           />
         ) : (
           <div className="grid aspect-video place-items-center text-sm text-white/60">Đang tải video…</div>
         )}
+        {warm && <div className="pointer-events-none absolute inset-0 mix-blend-soft-light" style={warm} />}
+        {vig && <div className="pointer-events-none absolute inset-0" style={{ background: vig }} />}
+        {live && (
+          <span className="pointer-events-none absolute right-2 top-2 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white">
+            Xem nhanh · gần đúng
+          </span>
+        )}
+        {box && overlays.filter((o) => outTime >= o.start && outTime <= o.end).map((o) => {
+          const base = Math.min(box.w, box.h);
+          const style = { left: box.x + o.x * box.w, top: box.y + o.y * box.h, transform: "translate(-50%, -50%)" } as const;
+          return o.kind === "text" ? (
+            <div key={o.id} className="pointer-events-none absolute whitespace-pre-wrap text-center leading-tight"
+              style={{ ...style, maxWidth: box.w * 0.9, color: o.color ?? "#fff", fontSize: o.size * base, fontWeight: o.bold === false ? 400 : 700,
+                background: o.box ? "rgba(0,0,0,.55)" : undefined, padding: o.box ? "0.15em 0.4em" : undefined,
+                textShadow: o.box ? undefined : "0 0 3px #000, 0 0 3px #000, 0 0 3px #000" }}>
+              {o.text}
+            </div>
+          ) : o.image ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img key={o.id} src={`/api/logos/${o.image}/file`} alt="" className="pointer-events-none absolute" style={{ ...style, width: o.size * box.w }} />
+          ) : null;
+        })}
         {mask.enabled && view === "source" && box && (
           <div
             className="pointer-events-none absolute border-2 border-dashed border-orange-300 bg-orange-300/15"
@@ -80,8 +113,8 @@ export function VideoPanel({ project: p, videoRef, src, view, onView, time, acti
         )}
       </div>
 
-      {dur > 0 && p.segments.length > 0 && (
-        <Timeline project={p} time={view === "preview" ? -1 : time} activeIdx={activeIdx} onSeek={onSeek} />
+      {dur > 0 && p.segments.length > 0 && !(edited && view !== "source") && (
+        <Timeline project={p} srcId={srcId} dur={dur} time={view === "preview" ? -1 : time} activeIdx={activeIdx} onSeek={onSeek} />
       )}
     </div>
   );
@@ -116,8 +149,7 @@ const FIT_COLOR = {
   overflow: "bg-over/80 hover:bg-over",
 } as const;
 
-function Timeline({ project: p, time, activeIdx, onSeek }: { project: Project; time: number; activeIdx: number; onSeek: (t: number) => void }) {
-  const dur = p.media!.duration;
+function Timeline({ project: p, srcId, dur, time, activeIdx, onSeek }: { project: Project; srcId: number; dur: number; time: number; activeIdx: number; onSeek: (t: number) => void }) {
   const pct = (t: number) => `${(Math.min(Math.max(t, 0), dur) / dur) * 100}%`;
   return (
     <div className="grid gap-1">
@@ -133,7 +165,7 @@ function Timeline({ project: p, time, activeIdx, onSeek }: { project: Project; t
         aria-valuemax={dur}
         aria-valuenow={Math.max(0, time)}
       >
-        {p.segments.map((s, i) => (
+        {p.segments.map((s, i) => (s.src_id ?? 0) !== srcId ? null : (
           <div
             key={s.id}
             title={`${fmt(s.start)} · ${s.vi || s.src}`}

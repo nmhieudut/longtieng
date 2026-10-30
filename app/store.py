@@ -62,6 +62,11 @@ def clean_settings(s: dict) -> dict:
     m["height"] = min(50, max(2, float(m["height"])))
     fr = s["frame"]
     fr["zoom"] = min(2.0, max(1.0, float(fr["zoom"])))
+    co = s["color"]
+    for k in ("brightness", "contrast", "saturation", "temperature"):
+        co[k] = int(min(100, max(-100, float(co[k]))))
+    for k in ("sharpness", "vignette"):
+        co[k] = int(min(100, max(0, float(co[k]))))
     lg = s["logo"]
     lg["text"] = str(lg["text"] or "").strip()[:40]
     lg["size"] = min(0.4, max(0.05, float(lg["size"])))
@@ -73,7 +78,7 @@ def clean_settings(s: dict) -> dict:
 
 # Settings worth carrying over to new videos ("Lưu làm mặc định"); the subtitle band is per video.
 DEFAULT_KEYS = ("lang", "target", "voice", "rate", "audio_mode", "orig_volume", "subtitle_mode", "sub_size", "sub_margin",
-                "music", "frame", "logo", "sub_style", "script")
+                "music", "frame", "color", "logo", "sub_style", "script")
 
 
 def user_defaults() -> dict:
