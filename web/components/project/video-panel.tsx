@@ -49,7 +49,8 @@ export function VideoPanel({
 }: Props) {
   const box = useMaskBox(videoRef, src);
   const stage = useRef<HTMLDivElement>(null);
-  const [vdur, setVdur] = useState(0);
+  const [vd, setVd] = useState<{ src: string | null; d: number }>({ src: null, d: 0 });
+  const vdur = vd.src === src ? vd.d : 0;   // the length of the file that is loaded now, not the one before
   const [full, setFull] = useState(false);
   const o = p.outputs;
   const dur = srcId === 0 ? p.media?.duration ?? 0 : p.extra_sources?.find((e) => e.id === srcId)?.duration ?? 0;
@@ -89,8 +90,8 @@ export function VideoPanel({
             style={live ? { filter: cssFilter(color) } : undefined}
             onClick={onTogglePlay}
             onTimeUpdate={(e) => onTime(e.currentTarget.currentTime)}
-            onLoadedMetadata={(e) => { setVdur(e.currentTarget.duration || 0); onLoaded(); }}
-            onDurationChange={(e) => setVdur(e.currentTarget.duration || 0)}
+            onLoadedMetadata={(e) => { setVd({ src, d: e.currentTarget.duration || 0 }); onLoaded(); }}
+            onDurationChange={(e) => setVd({ src, d: e.currentTarget.duration || 0 })}
           />
         ) : (
           <div className="grid size-full place-items-center text-sm text-white/60">Đang tải video…</div>

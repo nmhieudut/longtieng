@@ -53,13 +53,19 @@ export function SettingsPanel({
   const [still, setStill] = useState<string | null>(null);
   const [stillBusy, setStillBusy] = useState(false);
   const [s, setS] = useState(settings);
+  const [saving, setSaving] = useState(0);           // saves in flight: do not fall back to the server copy meanwhile
   const pending = useRef<DeepPartial<Settings>>({});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // follow the server copy unless a save is queued
   useEffect(() => {
-    if (!timer.current) setS(settings);
-  }, [settings]);
+    if (!timer.current && saving === 0) setS(settings);
+  }, [settings, saving]);
+
+  async function save(body: DeepPartial<Settings>) {
+    setSaving((n) => n + 1);
+    try { await onSave(body); } finally { setSaving((n) => n - 1); }
+  }
 
   function change(patch: DeepPartial<Settings>) {
     const next = { ...s, ...(patch as Partial<Settings>) } as Settings;
@@ -78,7 +84,7 @@ export function SettingsPanel({
       const body = pending.current;
       pending.current = {};
       timer.current = null;
-      try { await onSave(body); } catch (e) { toast.error((e as Error).message); }
+      try { await save(body); } catch (e) { toast.error((e as Error).message); }
     }, 450);
   }
 
@@ -89,7 +95,7 @@ export function SettingsPanel({
     timer.current = null;
     const body = pending.current;
     pending.current = {};
-    await onSave(body);
+    await save(body);
   }
 
   useImperativeHandle(handle, () => ({ flush }));
