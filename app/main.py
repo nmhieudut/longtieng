@@ -396,7 +396,7 @@ def upload(file: UploadFile = File(...), settings: str = Form("{}"), auto_render
 
         def hold(q):
             q["media"] = info
-            q["status"] = {"stage": "new", "progress": None, "message": "Chọn ngôn ngữ và giọng đọc, rồi bấm Bắt đầu.",
+            q["status"] = {"stage": "new", "progress": None, "message": "Chỉnh sửa rồi xuất luôn, hoặc bấm Dịch & lồng tiếng nếu cần.",
                            "error": None}
         store.update(p["id"], hold)
         return _view(store.load(p["id"]))
@@ -406,11 +406,11 @@ def upload(file: UploadFile = File(...), settings: str = Form("{}"), auto_render
 
 @app.post("/api/projects/{pid}/start")
 def start_project(pid: str, body: dict = Body({})):
-    """Begin recognising and translating a video that was imported but not started yet."""
+    """Recognise, translate and (later) dub a video that has no lines yet: dubbing is optional, a project can just be edited."""
     p = _load(pid)
     _not_busy(pid)
-    if p["status"]["stage"] != "new":
-        raise HTTPException(400, "Dự án đã bắt đầu rồi.")
+    if p["segments"] or p["status"]["stage"] not in ("new", "done"):
+        raise HTTPException(400, "Dự án đã có lời thoại rồi.")
     store.update(pid, lambda q: q.__setitem__("auto_render", bool(body.get("auto_render"))))
     store.set_status(pid, "queued", 0, "Đang chờ xử lý…")
     jobs.submit_prepare(pid)
@@ -771,8 +771,6 @@ def add_source(pid: str, file: UploadFile = File(...)):
     _not_busy(pid)
     if not p.get("media"):
         raise HTTPException(400, "Video chính chưa sẵn sàng.")
-    if p["status"]["stage"] == "new":
-        raise HTTPException(409, "Bấm Bắt đầu cho video chính trước, rồi mới thêm video khác.")
     ext = Path(file.filename or "").suffix.lower()
     if ext not in VIDEO_EXT:
         raise HTTPException(400, f"Định dạng {ext or '?'} không hỗ trợ. Dùng mp4, mov, webm, mkv.")
@@ -819,6 +817,8 @@ def add_source(pid: str, file: UploadFile = File(...)):
     except ValueError as e:
         dst.unlink(missing_ok=True)
         raise HTTPException(400, str(e))
+    if p["status"]["stage"] == "new" and not p["segments"]:
+        return _view(store.load(pid))   # editing only so far: nothing to recognise or translate
     store.set_status(pid, "extracting", None, "Đang chuẩn bị video mới…")  # so the page starts following the job
     try:
         jobs.submit_extra(pid, n)
@@ -832,8 +832,8 @@ def retry_source(pid: str, src: int):
     """Recognise and translate an added video again (it failed or was cancelled)."""
     p = _load(pid)
     _not_busy(pid)
-    if p["status"]["stage"] == "new":
-        raise HTTPException(409, "Bấm Bắt đầu cho video chính trước.")
+    if p["status"]["stage"] == "new" and not p["segments"]:
+        raise HTTPException(409, "Bấm Dịch & lồng tiếng cho video chính trước.")
     if not any(x["id"] == src for x in timeline.extra_sources(p)):
         raise HTTPException(404, "Không có video này trong dự án.")
     prev = p["status"]
@@ -880,12 +880,13 @@ def delete_source(pid: str, src: int):
 def start_render(pid: str, preview_start: float | None = Body(None, embed=True)):
     p = _load(pid)
     _not_busy(pid)
-    if not p["segments"] or not p.get("media"):
-        raise HTTPException(400, "Chưa có bản dịch để lồng tiếng.")
-    if p["settings"]["audio_mode"] == "demucs" and not demucs_available():
+    if not p.get("media"):
+        raise HTTPException(400, "Video chưa sẵn sàng.")
+    dubbed = bool(p["segments"])   # no lines: a plain video edit (cuts, colour, texts, music), the original sound stays
+    if dubbed and p["settings"]["audio_mode"] == "demucs" and not demucs_available():
         raise HTTPException(400, "Bản này không có tách nhạc nền (demucs). Chọn 'Giảm âm gốc' trong Cài đặt âm thanh.")
     done = p.get("translated_to", "vi")  # projects from before the target language existed were Vietnamese
-    if done != p["settings"]["target"]:
+    if dubbed and done != p["settings"]["target"]:
         raise HTTPException(400, f"Lời thoại đang là {TARGET_LANGS[done]['name']}. Đã đổi ngôn ngữ đích sang "
                                  f"{TARGET_LANGS[p['settings']['target']]['name']}: mở Cài đặt → Lời thoại và bấm "
                                  "“Viết lại lời thoại” trước khi xuất.")

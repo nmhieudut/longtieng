@@ -44,6 +44,8 @@ def _submit(pid: str, fn, *args):
             p = store.load(pid)
             if p["segments"]:
                 store.set_status(pid, "review", None, "Đã huỷ. Bản dịch vẫn giữ nguyên, bấm xuất lại khi sẵn sàng.")
+            elif fn is _render:   # a plain edit export: nothing was lost, the project is as before
+                store.set_status(pid, "new", None, "Đã huỷ xuất video.")
             else:
                 store.set_status(pid, "error", None, "Đã huỷ.", error="Đã huỷ theo yêu cầu. Bấm Thử lại để chạy lại.")
         except Exception as e:
@@ -51,7 +53,7 @@ def _submit(pid: str, fn, *args):
             msg = str(e) if isinstance(e, known) else f"{type(e).__name__}: {e}"
             traceback.print_exc()
             p = store.load(pid)
-            back = "review" if p["segments"] else "error"
+            back = "review" if p["segments"] else "new" if fn is _render else "error"
             store.set_status(pid, back, None, "Có lỗi xảy ra.", error=msg)
         finally:
             cancel.bind(None)
@@ -352,15 +354,19 @@ def _ensure_voice_model(pid: str, voice: str) -> None:
 
 def _render(pid: str, preview_start: float | None):
     d = store.pdir(pid)
-    _ensure_voice_model(pid, store.load(pid)["settings"]["voice"])
-    step(pid, "dubbing", 0, "Đang tạo giọng lồng tiếng…")
-    synth_missing(pid, lambda x: step(pid, "dubbing", x, "Đang tạo giọng lồng tiếng…"))
+    dubbed = bool(store.load(pid)["segments"])
+    if dubbed:
+        _ensure_voice_model(pid, store.load(pid)["settings"]["voice"])
+        step(pid, "dubbing", 0, "Đang tạo giọng lồng tiếng…")
+        synth_missing(pid, lambda x: step(pid, "dubbing", x, "Đang tạo giọng lồng tiếng…"))
 
     p = store.load(pid)
     if timeline.is_edited(p):
         step(pid, "rendering", 0, "Đang cắt ghép video…")
     # no edit: the project itself. Edited: a copy in output time (lines re-timed, edit.mp4 as the source)
     p = timeline.virtual(d, p, lambda x: step(pid, "rendering", x, "Đang cắt ghép video…"))
+    if not dubbed:   # nothing is dubbed: keep the original sound as it is
+        p = p | {"settings": p["settings"] | {"audio_mode": "duck", "orig_volume": 1.0}}
     st, media = p["settings"], p["media"]
     dub.mix(d, p["segments"], media["duration"], d / "dub.wav")
 
@@ -372,8 +378,9 @@ def _render(pid: str, preview_start: float | None):
         step(pid, "separating", None, "Đang tách nhạc nền (demucs, vài phút)…")
         bg = render.separate_background(d, src)
 
-    render.write_srt(p["segments"], media["duration"], d / "out" / "phude.srt")
-    render.write_transcript(p["segments"], d / "out" / "transcript.json", d / "out" / "transcript.txt")
+    if dubbed:
+        render.write_srt(p["segments"], media["duration"], d / "out" / "phude.srt")
+        render.write_transcript(p["segments"], d / "out" / "transcript.json", d / "out" / "transcript.txt")
 
     preview = preview_start is not None
     out = d / "out" / ("preview.mp4" if preview else "final.mp4")
@@ -387,10 +394,11 @@ def _render(pid: str, preview_start: float | None):
     def fin(q):
         key = "preview" if preview else "final"
         q["outputs"][key] = {"file": f"out/{out.name}", "at": time.time()}
-        q["outputs"]["srt"] = {"file": "out/phude.srt"}
-        q["outputs"]["json"] = {"file": "out/transcript.json"}
-        q["outputs"]["txt"] = {"file": "out/transcript.txt"}
-        q["status"] = {"stage": "review" if preview else "done", "progress": None,
+        if dubbed:
+            q["outputs"]["srt"] = {"file": "out/phude.srt"}
+            q["outputs"]["json"] = {"file": "out/transcript.json"}
+            q["outputs"]["txt"] = {"file": "out/transcript.txt"}
+        q["status"] = {"stage": ("review" if dubbed else "new") if preview else "done", "progress": None,
                        "message": "Bản xem thử đã sẵn sàng." if preview else "Xuất video xong!",
                        "error": None}
     store.update(pid, fin)

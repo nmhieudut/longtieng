@@ -35,7 +35,7 @@ export function SegmentList({ project: p, activeIdx, playing, onSeek, onSave, on
     return (
       <div className="flex flex-col items-center gap-3 px-6 py-16 text-center text-sm text-muted-foreground">
         {busy && <Loader2 className="size-6 animate-spin" />}
-        {busy ? "Bản dịch sẽ hiện ở đây khi nhận dạng và dịch xong." : "Chưa có câu nào."}
+        {busy ? "Bản dịch sẽ hiện ở đây khi nhận dạng và dịch xong." : "Video chưa được dịch. Cứ chỉnh sửa và xuất bình thường; muốn có lời thoại thì bấm nút dịch & lồng tiếng ở thanh trên."}
       </div>
     );
   }

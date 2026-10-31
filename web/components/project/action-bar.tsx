@@ -1,8 +1,8 @@
 "use client";
 
 import {
-  AlertTriangle, ArrowLeft, CheckCircle2, Clapperboard, Download, FileJson, FileText, FolderOpen, Info, Loader2, MoreHorizontal,
-  Play, RotateCcw, Rocket, Subtitles, Wand2, X,
+  AlertTriangle, ArrowLeft, CheckCircle2, Clapperboard, Download, FileJson, FileText, FolderOpen, Info, Languages, Loader2, MoreHorizontal,
+  Play, RotateCcw, Subtitles, Wand2, X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -64,6 +64,8 @@ export function ActionBar({ project: p, previewAt, onStart, onPreview, onRender,
   const stale = !!final?.at && !!p.edited_at && p.edited_at > final.at;
   const langStale = hasLines && (p.translated_to ?? "vi") !== p.settings.target;
   const cancelling = s.message === "Đang huỷ…";
+  // no lines: the video is simply being edited. Translating and dubbing is an option, not a step you must take.
+  const editOnly = !hasLines && (s.stage === "new" || s.stage === "done");
 
   const dl = (key: "final" | "srt" | "json" | "txt") => {
     const f = p.outputs[key];
@@ -109,12 +111,7 @@ export function ActionBar({ project: p, previewAt, onStart, onPreview, onRender,
         {stopping || cancelling ? <Loader2 className="animate-spin" /> : <X />}
       </IconButton>
     );
-  } else if (s.stage === "new" && !hasLines) {
-    middle = <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{s.message}</p>;
-    actions = (
-      <Button variant="brand" size="lg" className="h-9 rounded-xl px-4" onClick={onStart}><Rocket /> Bắt đầu</Button>
-    );
-  } else if (!hasLines) {
+  } else if (!hasLines && !editOnly) {
     middle = (
       <p className="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-destructive" title={s.error || s.message}>
         <AlertTriangle className="size-4 shrink-0" /><span className="truncate">{s.error || s.message}</span>
@@ -129,7 +126,7 @@ export function ActionBar({ project: p, previewAt, onStart, onPreview, onRender,
             {stale ? <AlertTriangle className="size-3.5" /> : <CheckCircle2 className="size-3.5" />}
             {stale ? "Có thay đổi chưa xuất lại" : `Video đã xuất · ${fmt(p.media?.duration ?? 0)} · ${ago(final.at!)}`}
           </span>
-        ) : <span className="font-medium">Sẵn sàng lồng tiếng</span>}
+        ) : <span className="font-medium">{editOnly ? "Chỉnh sửa rồi xuất luôn · dịch và lồng tiếng là tuỳ chọn" : "Sẵn sàng lồng tiếng"}</span>}
         {!s.error && s.message.startsWith("Đã huỷ") && <span className="text-muted-foreground">{s.message}</span>}
         {langStale && <span className="text-fast-foreground">Lời thoại chưa theo ngôn ngữ mới, bấm nút đũa phép để viết lại</span>}
         {nOver > 0 && (
@@ -156,7 +153,11 @@ export function ActionBar({ project: p, previewAt, onStart, onPreview, onRender,
             <TooltipContent className="grid max-w-xs gap-1">{p.warnings.map((w) => <span key={w}>• {w}</span>)}</TooltipContent>
           </Tooltip>
         )}
-        <IconButton label="Viết lại lời thoại theo cài đặt hiện tại" variant={langStale ? "brand" : "outline"} onClick={() => setAskRewrite(true)}><Wand2 /></IconButton>
+        {editOnly ? (
+          <IconButton label="Dịch & lồng tiếng (tuỳ chọn): nhận dạng giọng nói, dịch và đọc lại bằng giọng đã chọn" variant="outline" onClick={onStart}><Languages /></IconButton>
+        ) : (
+          <IconButton label="Viết lại lời thoại theo cài đặt hiện tại" variant={langStale ? "brand" : "outline"} onClick={() => setAskRewrite(true)}><Wand2 /></IconButton>
+        )}
         <IconButton label={`Xem thử 30 giây từ ${fmt(previewAt)}`} variant="outline" onClick={onPreview}><Play /></IconButton>
         {final && <IconButton label="Tải video MP4" href={dl("final")} download variant={stale ? "outline" : "secondary"}><Download /></IconButton>}
         <DropdownMenu>
@@ -196,13 +197,13 @@ export function ActionBar({ project: p, previewAt, onStart, onPreview, onRender,
     );
   }
 
-  const note = !active && hasLines ? (s.error ? s.error : saved?.error ? saved.error : null) : null;
+  const note = !active && (hasLines || editOnly) ? (s.error ? s.error : saved?.error ? saved.error : null) : null;
 
   return (
     <header className="shrink-0 rounded-2xl border bg-card px-3 py-2 shadow-sm">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         {head}
-        <div className="hidden lg:block"><Steps project={p} /></div>
+        {(hasLines || active) && <div className="hidden lg:block"><Steps project={p} /></div>}
         <div className="flex min-w-[220px] flex-1 items-center">{middle}</div>
         <div className="ml-auto flex items-center gap-1.5">{actions}</div>
       </div>

@@ -262,7 +262,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
         <ToolBtn disabled={disabled} label="Xoá đoạn đang chọn" hint="Delete" onClick={del} off={clips.length <= 1}><Trash2 /></ToolBtn>
         <ToolBtn disabled={disabled} label="Nhân đôi đoạn đang chọn" hint="D" onClick={dup}><Copy /></ToolBtn>
         <span className="mx-1 h-5 w-px bg-border" />
-        <ToolBtn disabled={disabled || isActive(p) || addPct !== null || p.status.stage === "new"} label="Thêm video khác vào cuối timeline" hint="nhận dạng và dịch lời luôn"
+        <ToolBtn disabled={disabled || isActive(p) || addPct !== null} label="Thêm video khác vào cuối timeline" hint="nếu dự án đã dịch thì nhận dạng và dịch lời luôn"
           onClick={() => addInput.current?.click()}>{addPct !== null ? <Loader2 className="animate-spin" /> : <Video />}</ToolBtn>
         <input ref={addInput} type="file" hidden accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mkv,.m4v"
           onChange={async (e) => {
@@ -308,7 +308,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
             <span key={e.id} className="flex items-center gap-1 rounded-full border px-2 py-1">
               <Video className="size-3" /> <span className="max-w-32 truncate" title={e.name}>{e.name}</span> · {clock(e.duration)}
               {e.has_audio && !p.segments.some((s) => (s.src_id ?? 0) === e.id) && (
-                <button type="button" disabled={disabled || isActive(p)} className="rounded p-0.5 text-fast-foreground hover:bg-accent"
+                <button type="button" disabled={disabled || isActive(p) || p.status.stage === "new"} className="rounded p-0.5 text-fast-foreground hover:bg-accent"
                   title="Video này chưa có lời thoại: nhận dạng và dịch lại"
                   onClick={() => api.retrySource(p.id, e.id).then(onApply).catch((err) => toast.error((err as Error).message))}><RotateCw className="size-3" /></button>
               )}

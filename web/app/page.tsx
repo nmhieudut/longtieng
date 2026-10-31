@@ -62,7 +62,7 @@ function NewProject() {
     if (failed.length) toast.error(`${failed.length} video lỗi:\n${failed.join("\n")}`);
     if (ok === 1 && files.length === 1 && last) { router.push(`/project?id=${last}`); return; }
     if (ok) {
-      toast.success(`Đã thêm ${ok} video. Mở từng video để chọn ngôn ngữ, hoặc bấm “Bắt đầu tất cả”.`);
+      toast.success(`Đã thêm ${ok} video. Mở để chỉnh sửa và xuất luôn, hoặc dịch & lồng tiếng nếu cần.`);
       window.dispatchEvent(new Event("projects-changed"));
     }
   }
@@ -72,7 +72,7 @@ function NewProject() {
     <Card className="self-start">
       <CardHeader>
         <CardTitle className="text-xl font-bold tracking-[-0.025em]">Nhập video</CardTitle>
-        <CardDescription>Chọn một hoặc nhiều video. Ngôn ngữ và giọng đọc chọn trong từng dự án.</CardDescription>
+        <CardDescription>Chọn một hoặc nhiều video. Chỉnh sửa và xuất như một công cụ dựng video; dịch và lồng tiếng chỉ là tuỳ chọn.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">
         <button type="button" disabled={busy || !cfg} onClick={() => input.current?.click()}
@@ -164,7 +164,7 @@ function ProjectList() {
               <Switch checked={autoRender} onCheckedChange={setAutoRender} aria-label="Tự xuất video khi xử lý xong" /> Tự xuất
             </label>
             <Button variant="brand" size="lg" className="h-9 rounded-xl px-4" disabled={starting} onClick={startAll}>
-              {starting ? <Loader2 className="animate-spin" /> : <Rocket />} Bắt đầu tất cả ({fresh.length})
+              {starting ? <Loader2 className="animate-spin" /> : <Rocket />} Dịch & lồng tiếng tất cả ({fresh.length})
             </Button>
           </>
         )}
@@ -196,7 +196,7 @@ function ProjectList() {
                 </Link>
                 <StageBadge stage={p.status.stage} hasFinal={p.has_final} progress={p.status.progress} />
                 {p.status.stage === "new" && (
-                  <IconButton label="Bắt đầu video này" variant="outline"
+                  <IconButton label="Dịch & lồng tiếng video này" variant="outline"
                     onClick={() => api.start(p.id, autoRender).then(load).catch((e) => toast.error(e.message))}><Play /></IconButton>
                 )}
                 <AlertDialog>

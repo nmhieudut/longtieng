@@ -157,7 +157,7 @@ export const ACTIVE: ReadonlySet<Stage> = new Set([
 export const isActive = (p: Pick<Project, "status"> & { busy?: boolean }) => !!p.busy || ACTIVE.has(p.status.stage);
 
 export const STAGE_LABEL: Record<Stage, string> = {
-  new: "Chưa bắt đầu", queued: "Đang chờ", downloading: "Đang tải", extracting: "Tách âm", model: "Tải model",
+  new: "Chỉnh sửa", queued: "Đang chờ", downloading: "Đang tải", extracting: "Tách âm", model: "Tải model",
   transcribing: "Nhận dạng", detecting: "Dò phụ đề", translating: "Đang dịch", review: "Chờ duyệt", dubbing: "Lồng tiếng",
   separating: "Tách nhạc", rendering: "Đang xuất", done: "Hoàn tất", error: "Lỗi",
 };

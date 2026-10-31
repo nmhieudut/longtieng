@@ -196,7 +196,7 @@ export function ScriptSection({ s, styles, targetLangs, sourceLangs, langLocked,
   const label = (k: string) => targetLangs[k]?.label ?? k;
   const lower = (k: string) => label(k).replace(/^Tiếng/, "tiếng");  // "Tiếng Việt" -> "tiếng Việt" inside a sentence
   return (
-    <Section value="script" icon={<Sparkles />} title="Ngôn ngữ & lời thoại"
+    <Section value="script" icon={<Sparkles />} title="Dịch & lồng tiếng (tuỳ chọn)"
       summary={`${sourceLangs[s.lang] ?? s.lang} → ${label(s.target)} · ${sc.mode === "review" ? `Review AI · ${styles[sc.style] ?? sc.style}` : "Dịch sát nghĩa"}`}>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Ngôn ngữ trong video">

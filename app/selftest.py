@@ -271,7 +271,34 @@ def _pipeline(clip: Path) -> str:
             kinds = {s_["codec_type"] for s_ in info["streams"]}
             if abs(got2 - expect2) > 1.0 or kinds != {"video", "audio"}:
                 raise RuntimeError(f"ghép nhiều video: dài {got2:.1f}s (cần {expect2:.1f}s), luồng {sorted(kinds)}")
-            return f"final.mp4 {size_vi} KB, tiếng Nhật {ja_kb} KB, timeline {got:.1f}s, ghép 3 video {got2:.1f}s"
+            # no dubbing at all: import without starting, cut + colour, export. The original sound stays, no lines
+            with open(clip, "rb") as f:
+                r = c.post("/api/projects/upload", files={"file": ("edit.mp4", f, "video/mp4")},
+                           data={"settings": '{"color":{"brightness":10}}', "start": "false"})
+            r.raise_for_status()
+            eid = r.json()["id"]
+            D2 = r.json()["media"]["duration"]
+            with open(silent, "rb") as f:
+                r = c.post(f"/api/projects/{eid}/sources", files={"file": ("silent.mp4", f, "video/mp4")})
+            r.raise_for_status()
+            if r.json()["segments"] or r.json()["status"]["stage"] != "new":
+                raise RuntimeError("thêm video vào dự án chưa dịch mà lại đi nhận dạng")
+            clips2 = [{"start": 0, "end": D2 * 0.5}, {"src": 1, "start": 0, "end": 2.0}]
+            c.put(f"/api/projects/{eid}/timeline", json={"clips": clips2}).raise_for_status()
+            c.post(f"/api/projects/{eid}/render", json={"preview_start": None}).raise_for_status()
+            p2 = _wait(c, eid, {"done"}, 600)
+            out2 = store.pdir(eid) / "out" / "final.mp4"
+            pr = cancel.run([config.FFPROBE, "-v", "error", "-show_entries", "format=duration:stream=codec_type",
+                             "-of", "json", str(out2)], timeout=60)
+            info = _json.loads(pr.stdout)
+            got3 = float(info["format"]["duration"])
+            kinds = {s_["codec_type"] for s_ in info["streams"]}
+            if abs(got3 - (D2 * 0.5 + 2.0)) > 0.8 or kinds != {"video", "audio"} or p2["segments"] or p2["outputs"].get("srt"):
+                raise RuntimeError(f"chỉ chỉnh sửa: dài {got3:.1f}s, luồng {sorted(kinds)}")
+            from app import render as _render_mod
+            if _render_mod.mean_volume_db(out2) < -50:
+                raise RuntimeError("chỉ chỉnh sửa: mất tiếng gốc")
+            return f"final.mp4 {size_vi} KB, tiếng Nhật {ja_kb} KB, timeline {got:.1f}s, ghép 3 video {got2:.1f}s, chỉ chỉnh sửa {got3:.1f}s"
     finally:
         server.should_exit = True
 

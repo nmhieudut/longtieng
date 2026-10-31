@@ -215,7 +215,7 @@ export function ProjectView({ id }: { id: string }) {
   const previewAt = view === "preview" || loadedSrc !== 0 ? 0 : time;   // main video time (still preview, cover)
   const outAt = view === "preview" ? 0 : tl.edited && view === "source" ? clipPlay.T : time;  // output time (30 s preview)
   const fresh = p.status.stage === "new" && p.segments.length === 0;
-  const tab = tabSel ?? (fresh ? "script" : "lines");
+  const tab = tabSel ?? (fresh ? "color" : "lines");
   const locked = busy && RENDER_STAGES.includes(p.status.stage);
   const sectionTab = (SECTION_IDS as readonly string[]).includes(tab) ? (tab as SectionId) : null;
   const flushAll = async () => {
@@ -225,7 +225,7 @@ export function ProjectView({ id }: { id: string }) {
 
   const RAIL: { id: string; label: string; icon: React.ReactNode }[] = [
     { id: "lines", label: `Bản dịch${p.segments.length ? ` (${p.segments.length})` : ""}`, icon: <Languages /> },
-    { id: "script", label: "Ngôn ngữ & lời thoại", icon: <Sparkles /> },
+    { id: "script", label: "Dịch & lồng tiếng (tuỳ chọn)", icon: <Sparkles /> },
     { id: "voice", label: "Giọng đọc", icon: <Mic /> },
     { id: "audio", label: "Âm thanh gốc", icon: <AudioLines /> },
     { id: "music", label: "Nhạc nền", icon: <Music /> },
