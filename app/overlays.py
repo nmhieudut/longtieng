@@ -40,7 +40,7 @@ def validate(raw, durations: dict[int, float] | None = None) -> list[dict]:
         if b - a < MIN_LEN:
             raise ValueError(f"Mỗi chữ/hình dán phải hiện ít nhất {MIN_LEN:g} giây.")
         item = {"id": "", "kind": kind, "start": a, "end": b, "x": min(1.0, max(0.0, x)), "y": min(1.0, max(0.0, y)),
-                "size": round(min(1.0 if kind == "video" else 0.8, max(0.02, size)), 3)}
+                "size": round(min(1.0 if kind == "video" else 0.3 if kind == "text" else 0.8, max(0.02, size)), 3)}
         if kind == "text":
             text = str(o.get("text", "")).strip()[:200]
             if not text:

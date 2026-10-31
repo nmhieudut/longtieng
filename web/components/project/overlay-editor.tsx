@@ -18,9 +18,24 @@ const MIN_LEN = 0.2;
 const HANDLE = 6;
 const SWATCHES = ["#ffffff", "#ffd400", "#ff4d4d", "#4dd2ff", "#7cfc00", "#000000"];
 
+/** Lane of each item: the first lane where it does not overlap an earlier one, so nothing hides behind another. */
+export function overlayLanes(items: Overlay[]): number[] {
+  const order = items.map((o, i) => i).sort((a, b) => items[a].start - items[b].start);
+  const ends: number[] = [];
+  const lane = new Array<number>(items.length).fill(0);
+  for (const i of order) {
+    let k = ends.findIndex((e) => e <= items[i].start + 1e-6);
+    if (k < 0) { k = ends.length; ends.push(0); }
+    ends[k] = items[i].end;
+    lane[i] = k;
+  }
+  return lane;
+}
+
 /** Row of the timeline with the texts and stickers: drag a block to move it, drag its edges to change how long it shows. */
-export function OverlayTrack({ items, pps, total, selectedId, disabled, srcDuration, onSelect, onChange, onScrub }: {
+export function OverlayTrack({ items, pps, total, selectedId, disabled, srcDuration, snaps, onSelect, onChange, onScrub }: {
   items: Overlay[]; pps: number; total: number; selectedId: string | null; disabled: boolean;
+  snaps: number[];                         // times (seconds) the edges stick to: playhead, clip edges, other items
   srcDuration: (src: number) => number;   // length of a video, so a video layer cannot run past its end
   onSelect: (id: string) => void; onChange: (next: Overlay[]) => void; onScrub: (e: React.PointerEvent<HTMLElement>) => void;
 }) {
@@ -33,17 +48,23 @@ export function OverlayTrack({ items, pps, total, selectedId, disabled, srcDurat
     const base = items;
     const move = (ev: PointerEvent) => {
       const dt = (ev.clientX - x0) / pps;
+      const thr = 8 / pps;
+      const near = (t: number) => { let best: number | null = null; for (const s of snaps) if (Math.abs(s - t) < thr && (best === null || Math.abs(s - t) < Math.abs(best - t))) best = s; return best; };
       let a = o.start;
       let b = o.end;
       if (mode === "move") {
         const len = o.end - o.start;
         a = Math.min(Math.max(0, o.start + dt), Math.max(0, total - len));
+        const sa = near(a), sb = near(a + len);   // the front or the back edge sticks
+        if (sa !== null) a = sa; else if (sb !== null) a = sb - len;
         b = a + len;
       } else if (mode === "start") {
         a = Math.min(Math.max(o.kind === "video" ? o.start - (o.from ?? 0) : 0, o.start + dt), o.end - MIN_LEN);
+        a = near(a) ?? a;
       } else {
         const room = o.kind === "video" ? o.start + srcDuration(o.src ?? 0) - (o.from ?? 0) : total;   // the layer's own video ends there
         b = Math.max(Math.min(room, o.end + dt), o.start + MIN_LEN);
+        b = near(b) ?? b;
       }
       // trimming the front of a video layer moves where in the video it starts, so the picture stays in step
       onChange(base.map((x) => (x.id === o.id ? { ...x, start: +a.toFixed(2), end: +b.toFixed(2), ...(x.kind === "video" ? { from: +Math.max(0, (o.from ?? 0) + (a - o.start)).toFixed(2) } : {}) } : x)));
@@ -53,15 +74,17 @@ export function OverlayTrack({ items, pps, total, selectedId, disabled, srcDurat
     window.addEventListener("pointerup", up);
   };
 
+  const lane = overlayLanes(items);
+  const lanes = Math.max(1, ...lane.map((l) => l + 1));
   return (
-    <div className="relative mt-1" style={{ height: OVERLAY_H }} onPointerDown={onScrub}>
-      {items.map((o) => (
+    <div data-track="overlay" className="relative mt-1" style={{ height: OVERLAY_H * lanes }} onPointerDown={onScrub}>
+      {items.map((o, n) => (
         <div key={o.id} role="button" tabIndex={0} title={o.kind === "text" ? o.text : o.kind === "video" ? "Video chồng" : "Hình dán"}
           onPointerDown={(e) => drag(e, o, "move")}
-          className={cn("absolute top-0 flex h-full items-center overflow-hidden rounded-sm border px-1.5 text-[10px] leading-none",
+          className={cn("absolute flex items-center overflow-hidden rounded-sm border px-1.5 text-[10px] leading-none",
             o.kind === "text" ? "border-primary/50 bg-primary/20" : o.kind === "video" ? "border-ok/60 bg-ok/20" : "border-fast/60 bg-fast/25",
             selectedId === o.id && "ring-2 ring-primary", disabled ? "cursor-default" : "cursor-grab active:cursor-grabbing")}
-          style={{ left: o.start * pps, width: Math.max((o.end - o.start) * pps - 1, 6) }}>
+          style={{ left: o.start * pps, top: lane[n] * OVERLAY_H, width: Math.max((o.end - o.start) * pps - 1, 6), height: OVERLAY_H - 2 }}>
           <span className="pointer-events-none truncate">{o.kind === "text" ? o.text : o.kind === "video" ? "▶ Video chồng" : "▣ Hình dán"}</span>
           {(["start", "end"] as const).map((side) => (
             <span key={side} onPointerDown={(e) => drag(e, o, side)}
@@ -121,7 +144,7 @@ export function OverlayInspector({ o, total, disabled, onChange, onDelete }: {
           </div>
           <div className="grid gap-2">
             <Label className="text-xs text-muted-foreground">Cỡ chữ</Label>
-            <Slider min={0.03} max={0.2} step={0.005} disabled={disabled} value={[o.size]} onValueChange={([v]) => onChange({ size: v })} aria-label="Cỡ chữ" />
+            <Slider min={0.03} max={0.3} step={0.005} disabled={disabled} value={[o.size]} onValueChange={([v]) => onChange({ size: v })} aria-label="Cỡ chữ" />
           </div>
           <div className="grid gap-2">
             <Label className="text-xs text-muted-foreground">Màu chữ</Label>

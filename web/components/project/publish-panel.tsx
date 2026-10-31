@@ -23,12 +23,11 @@ type Props = {
 
 export function PublishPanel({ project: p, time, apply }: Props) {
   const ready = p.segments.some((s) => s.vi.trim());
-  if (!ready) {
-    return <p className="px-6 py-16 text-center text-sm text-muted-foreground">Xong bước dịch thì mới viết caption và làm ảnh bìa được.</p>;
-  }
   return (
     <div className="grid gap-6 p-4">
-      <CaptionBox project={p} apply={apply} />
+      {ready ? <CaptionBox project={p} apply={apply} /> : (
+        <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">Caption do AI viết từ lời thoại, nên cần dịch & lồng tiếng trước. Ảnh bìa thì làm ngay được.</p>
+      )}
       <Separator />
       <CoverBox project={p} time={time} apply={apply} />
     </div>

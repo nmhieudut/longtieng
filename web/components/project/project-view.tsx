@@ -1,6 +1,6 @@
 "use client";
 
-import { SlidersHorizontal, Captions, Languages, Mic, Music, Palette, Send, WifiOff } from "lucide-react";
+import { SlidersHorizontal, Captions, Film, ImageIcon, Keyboard, Languages, Mic, Palette, Send, Volume2, WifiOff } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -9,6 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { IconButton } from "@/components/ui/icon-button";
 import { ResizeHandle } from "@/components/ui/resize-handle";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import { ShortcutSheet } from "./shortcut-sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, type Config, type DeepPartial, fileUrl, isActive, type Project, type Settings } from "@/lib/api";
 
@@ -17,6 +20,7 @@ import { SECTION_IDS, type SectionId, SettingsPanel, type SettingsHandle } from 
 import { ActionBar } from "./action-bar";
 import { useProject } from "./use-project";
 import { PublishPanel } from "./publish-panel";
+import { MediaLibrary } from "./media-library";
 import { TimelinePanel, type TimelineHandle } from "./timeline-panel";
 import { useClipPlayback } from "./use-clip-playback";
 import { newEditLog } from "./edit-log";
@@ -43,6 +47,8 @@ export function ProjectView({ id }: { id: string }) {
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [tabSel, setTab] = useState<string | null>(null);
+  const [expView, setExpView] = useState<"settings" | "publish">("settings");
+  const [keys, setKeys] = useState(false);
   const [dubSel, setDubView] = useState<"lines" | "config" | null>(null);   // inside Lồng tiếng: the lines or the settings
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
@@ -238,7 +244,7 @@ export function ProjectView({ id }: { id: string }) {
   const previewAt = view === "preview" || loadedSrc !== 0 ? 0 : time;   // main video time (still preview, cover)
   const outAt = view === "preview" ? 0 : tl.edited && view === "source" ? clipPlay.T : time;  // output time (30 s preview)
   const fresh = p.status.stage === "new" && p.segments.length === 0;
-  const tab = tabSel ?? (fresh ? "look" : "dub");
+  const tab = tabSel ?? (fresh ? "media" : "dub");
   const locked = busy && RENDER_STAGES.includes(p.status.stage);
   const dubView = dubSel ?? (p.segments.length ? "lines" : "config");
   const sectionTab = (SECTION_IDS as readonly string[]).includes(tab) ? (tab as SectionId) : null;
@@ -247,13 +253,14 @@ export function ProjectView({ id }: { id: string }) {
     if (a instanceof HTMLTextAreaElement) { a.blur(); await new Promise((r) => setTimeout(r, 300)); }  // a line being typed saves on blur
      await settingsRef.current?.flush(); await tl.flush(); await overlays.flush(); };
 
-  const RAIL: { id: string; label: string; icon: React.ReactNode }[] = [
-    { id: "props", label: "Thuộc tính đoạn / chữ / nhạc đang chọn", icon: <SlidersHorizontal /> },
-    { id: "dub", label: `Lồng tiếng: bản dịch, giọng đọc, âm thanh gốc (tuỳ chọn)`, icon: <Mic /> },
-    { id: "music", label: "Nhạc nền", icon: <Music /> },
-    { id: "subs", label: "Phụ đề và che phụ đề gốc", icon: <Captions /> },
-    { id: "look", label: "Hình ảnh: khung hình, màu, logo", icon: <Palette /> },
-    { id: "publish", label: "Đăng Reels", icon: <Send /> },
+  const RAIL: { id: string; short: string; label: string; icon: React.ReactNode; badge?: number }[] = [
+    { id: "media", short: "Thư viện", label: `Thư viện video (${1 + (p.extra_sources?.length ?? 0)}): thêm, kéo xuống timeline`, icon: <Film />, badge: p.extra_sources?.length ? 1 + p.extra_sources.length : undefined },
+    { id: "props", short: "Thuộc tính", label: "Thuộc tính của đoạn, chữ, hình dán, video chồng đang chọn", icon: <SlidersHorizontal /> },
+    { id: "dub", short: "Lồng tiếng", label: "Lồng tiếng (tuỳ chọn): bản dịch, ngôn ngữ, giọng đọc", icon: <Mic />, badge: p.segments.filter((x) => x.vi.trim() && x.fit?.status === "overflow").length || undefined },
+    { id: "subs", short: "Phụ đề", label: "Phụ đề và che phụ đề gốc", icon: <Captions /> },
+    { id: "audio", short: "Âm thanh", label: "Âm thanh gốc và nhạc nền", icon: <Volume2 /> },
+    { id: "look", short: "Hình", label: "Khung hình, chỉnh màu, logo", icon: <Palette /> },
+    { id: "export", short: "Xuất", label: "Xuất video: nền tảng, chất lượng, âm lượng; đăng: caption, ảnh bìa", icon: <Send /> },
   ];
 
   return (
@@ -264,6 +271,7 @@ export function ProjectView({ id }: { id: string }) {
           Mất kết nối tới server. Kiểm tra server còn chạy không (uv run python -m app). Trang sẽ tự kết nối lại.
         </div>
       )}
+      <ShortcutSheet open={keys} onOpenChange={setKeys} />
       <ActionBar
         project={p}
         previewAt={outAt}
@@ -291,7 +299,9 @@ export function ProjectView({ id }: { id: string }) {
         style={{ "--rw": `${(rightFrac * 100).toFixed(2)}%` } as React.CSSProperties}>
         <div ref={leftRef} className="flex min-h-0 flex-col gap-2 lg:gap-0 [&>*]:min-w-0"
           style={{ "--th": `${(tlFrac * 100).toFixed(2)}%` } as React.CSSProperties}>
-          <Card className="h-[48vh] min-h-[220px] p-2 sm:p-2 lg:h-auto lg:min-h-[280px] lg:flex-1">
+          <Card className="h-[48vh] min-h-[220px] p-2 sm:p-2 lg:h-auto lg:min-h-[280px] lg:flex-1"
+            onDragOver={(e) => { if (!locked && e.dataTransfer.types.includes("Files")) e.preventDefault(); }}
+            onDrop={(e) => { if (locked || !e.dataTransfer.files.length) return; e.preventDefault(); tlRef.current?.uploadFiles(Array.from(e.dataTransfer.files)); }}>
             <VideoPanel
               project={p}
               videoRef={videoRef}
@@ -386,12 +396,34 @@ export function ProjectView({ id }: { id: string }) {
             setRightFrac(clampFrac((r.right - x - 4) / r.width, MIN_RIGHT_PX / r.width, MAX_RIGHT));
           }} />
         <Card className="h-[70vh] min-w-0 flex-row gap-0 overflow-hidden p-0 lg:h-auto lg:min-h-0">
-          <nav aria-label="Các mục" className="flex w-11 shrink-0 flex-col items-center gap-1 overflow-y-auto border-r bg-muted/30 py-2">
+          <nav aria-label="Các mục" className="flex w-[70px] shrink-0 flex-col items-center gap-0.5 overflow-y-auto border-r bg-muted/30 py-1.5">
             {RAIL.map((r) => (
-              <IconButton key={r.id} label={r.label} active={tab === r.id} onClick={() => setTab(r.id)}>{r.icon}</IconButton>
+              <Tooltip key={r.id}>
+                <TooltipTrigger asChild>
+                  <button type="button" aria-label={r.label} aria-pressed={tab === r.id} onClick={() => setTab(r.id)}
+                    className={cn("relative flex w-16 flex-col items-center gap-0.5 rounded-lg px-0.5 py-1.5 text-[10px] leading-tight text-muted-foreground transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-4",
+                      tab === r.id && "bg-accent text-foreground ring-1 ring-primary/40")}>
+                    {r.icon}
+                    <span className="whitespace-nowrap">{r.short}</span>
+                    {r.badge ? <span className="absolute right-1 top-0.5 min-w-4 rounded-full bg-primary px-1 text-[9px] font-semibold text-primary-foreground">{r.badge}</span> : null}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="left">{r.label}</TooltipContent>
+              </Tooltip>
             ))}
+            <span className="mt-auto" />
+            <IconButton label="Phím tắt" onClick={() => setKeys(true)}><Keyboard /></IconButton>
           </nav>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {tab === "export" && (
+              <div className="flex shrink-0 gap-1 border-b p-2">
+                {([["settings", "Xuất video", <Send key="s" />], ["publish", "Đăng: caption, ảnh bìa", <ImageIcon key="i" />]] as const).map(([id, label, icon]) => (
+                  <Button key={id} type="button" size="sm" variant={expView === id ? "secondary" : "ghost"} className="flex-1" onClick={() => setExpView(id)}>
+                    {icon} {label}
+                  </Button>
+                ))}
+              </div>
+            )}
             {tab === "dub" && (
               <div className="flex shrink-0 gap-1 border-b p-2">
                 {([["lines", `Bản dịch${p.segments.length ? ` (${p.segments.length})` : ""}`, <Languages key="l" />], ["config", "Giọng và cài đặt", <Mic key="m" />]] as const).map(([id, label, icon]) => (
@@ -414,14 +446,18 @@ export function ProjectView({ id }: { id: string }) {
                 onPlay={onPlay}
               />
             </div>
+            <div className="h-full overflow-y-auto" hidden={tab !== "media"}>
+              <MediaLibrary project={p} tl={tlRef} onApply={apply} disabled={locked} />
+            </div>
             <div ref={setInspectorHost} className="h-full overflow-y-auto" hidden={tab !== "props"} />
-            <div className="h-full" hidden={!sectionTab || (tab === "dub" && dubView !== "config")}>
+            <div className="h-full" hidden={!sectionTab || (tab === "dub" && dubView !== "config") || (tab === "export" && expView !== "settings")}>
               <SettingsPanel
                 projectId={id}
                 section={sectionTab ?? "dub"}
                 handle={settingsRef}
                 sourceLangs={cfg?.langs ?? {}}
                 langLocked={p.segments.length > 0 || (busy && !locked)}
+                canHw={cfg?.features.hw_encoder ?? false}
                 previewAt={previewAt}
                 subStyles={cfg?.sub_styles ?? {}}
                 reviewStyles={cfg?.review_styles ?? {}}
@@ -445,7 +481,7 @@ export function ProjectView({ id }: { id: string }) {
                 }}
               />
             </div>
-            <div className="h-full overflow-y-auto" hidden={tab !== "publish"}>
+            <div className="h-full overflow-y-auto" hidden={!(tab === "export" && expView === "publish")}>
               <PublishPanel project={p} time={previewAt} apply={apply} />
             </div>
           </div>

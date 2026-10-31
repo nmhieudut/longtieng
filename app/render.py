@@ -416,11 +416,43 @@ def build_filters(proj_dir: Path, proj: dict, bg_label: str | None, start: float
             chain.append(f"{m}[mus]")
             chain.append("[sc]anullsink")
         mix.append("[mus]")
+    norm = ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000" if (st.get("export") or {}).get("loudnorm") and not length else ""
     if len(mix) == 1:
-        chain.append("[dub]anull[aout]")
+        chain.append(f"[dub]anull{norm}[aout]")
     else:
-        chain.append(f"{''.join(mix)}amix=inputs={len(mix)}:normalize=0:duration=first,alimiter=limit=0.95[aout]")
+        chain.append(f"{''.join(mix)}amix=inputs={len(mix)}:normalize=0:duration=first,alimiter=limit=0.95{norm}[aout]")
     return ";".join(chain)
+
+
+_HW: dict[str, bool] = {}
+
+
+def hw_encoder_available() -> bool:
+    """The Mac's VideoToolbox H.264 encoder, if this ffmpeg was built with it."""
+    if "h264" not in _HW:
+        ok = False
+        if sys.platform == "darwin":
+            try:
+                r = cancel.run([FFMPEG, "-hide_banner", "-encoders"], timeout=20)
+                ok = "h264_videotoolbox" in r.stdout
+            except Exception:
+                ok = False
+        _HW["h264"] = ok
+    return _HW["h264"]
+
+
+def video_encoder(ex: dict, preview: bool, media: dict) -> list[str]:
+    """ffmpeg arguments for the output video. A preview is always the fastest software encode (it is thrown away)."""
+    q = ex.get("quality", "balanced")
+    if not preview and ex.get("hw", True) and hw_encoder_available():
+        # hardware encoders take a bitrate, not a quality: scale it with the picture size (about 8 Mbit/s at 1080x1920)
+        px = max(1, int(media.get("width", 1080)) * int(media.get("height", 1920)))
+        mbit = {"fast": 6.0, "balanced": 9.0, "high": 14.0}[q] * min(1.5, max(0.4, px / (1080 * 1920)))
+        return ["-c:v", "h264_videotoolbox", "-b:v", f"{mbit:.1f}M", "-allow_sw", "1"]
+    if preview:
+        return ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "20"]
+    preset, crf = {"fast": ("veryfast", "24"), "balanced": ("veryfast", "20"), "high": ("slow", "17")}[q]
+    return ["-c:v", "libx264", "-preset", preset, "-crf", crf]
 
 
 def render(proj_dir: Path, proj: dict, out: Path, bg: Path | None,
@@ -486,7 +518,7 @@ def render(proj_dir: Path, proj: dict, out: Path, bg: Path | None,
     filters = build_filters(proj_dir, proj, bg_label, start, length, music_label, logo_label, overlay_imgs, overlay_vids)
     cmd += ["-filter_complex", filters, "-map", "[vout]", "-map", "[aout]"]
     cmd += ["-t", f"{(length or media['duration']):.3f}"]
-    cmd += ["-c:v", "libx264", "-preset", "ultrafast" if length else "veryfast", "-crf", "20",
+    cmd += [*video_encoder(proj["settings"].get("export") or {}, bool(length), media),
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
             str(part)]
 

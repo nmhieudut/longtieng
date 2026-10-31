@@ -34,6 +34,7 @@ export type Settings = {
   frame: { aspect: "original" | "9:16" | "16:9" | "1:1" | "4:5"; fit: "blur" | "crop"; zoom: number };
   color: { brightness: number; contrast: number; saturation: number; temperature: number; sharpness: number; vignette: number };
   logo: { image: string | null; text: string; position: "tl" | "tr" | "bl" | "br"; size: number; opacity: number };
+  export: { quality: "fast" | "balanced" | "high"; hw: boolean; loudnorm: boolean };
   sub_style: string;
   script: { mode: "translate" | "review"; style: string };
 };
@@ -118,7 +119,7 @@ export type Config = {
   max_upload_mb: number;
   max_duration_min: number;
   translator: string;
-  features: { demucs: boolean };
+  features: { demucs: boolean; hw_encoder: boolean };
   langs: Record<string, string>;
   target_langs: Record<string, { label: string; voice: string }>;
   sub_styles: Record<string, string>;
@@ -327,11 +328,12 @@ export const fullCaption = (c: Caption) =>
   [c.title, c.description, c.hashtags.join(" ")].filter((x) => x.trim()).join("\n\n");
 
 /** Add another video to a project's timeline (XHR for the upload progress). */
-export function addSource(id: string, file: File, onProgress: (x: number) => void, layer?: { at: number }): Promise<Project> {
+export function addSource(id: string, file: File, onProgress: (x: number) => void, opts: { layer?: { at: number }; index?: number } = {}): Promise<Project> {
   return new Promise((resolve, reject) => {
     const fd = new FormData();
     fd.append("file", file);
-    if (layer) { fd.append("as_layer", "true"); fd.append("at", String(layer.at)); }
+    if (opts.layer) { fd.append("as_layer", "true"); fd.append("at", String(opts.layer.at)); }
+    if (opts.index !== undefined) fd.append("index", String(opts.index));
     const x = new XMLHttpRequest();
     x.open("POST", `/api/projects/${id}/sources`);
     x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);

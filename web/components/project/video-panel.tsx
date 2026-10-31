@@ -88,7 +88,7 @@ export function VideoPanel({
     if (!r) return;
     const cx = r.left + box.x + o.x * box.w, cy = r.top + box.y + o.y * box.h;
     const d0 = Math.max(8, Math.hypot(e.clientX - cx, e.clientY - cy));
-    const max = o.kind === "video" ? 1 : o.kind === "text" ? 0.4 : 0.8;
+    const max = o.kind === "video" ? 1 : o.kind === "text" ? 0.3 : 0.8;
     const move = (ev: PointerEvent) => onResizeOverlay(o.id, Math.min(max, Math.max(0.03, o.size * (Math.hypot(ev.clientX - cx, ev.clientY - cy) / d0))));
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move);

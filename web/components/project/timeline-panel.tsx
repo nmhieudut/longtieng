@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, Gauge, Layers, SquareDashed, HelpCircle, ImagePlus, Loader2, Plus, Redo2, RotateCcw, RotateCw, Scissors, Trash2, Type, Undo2, Video, Volume2, ZoomIn } from "lucide-react";
+import { Copy, Gauge, Layers, SquareDashed, HelpCircle, ImagePlus, Loader2, Redo2, RotateCcw, Scissors, Trash2, Type, Undo2, Video, Volume2, ZoomIn } from "lucide-react";
 import { type Ref, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
@@ -15,7 +15,7 @@ import { type Clip, clock, GAP, isGap, MAX_GAP, duplicateAt, full, layout, len, 
 import { cn } from "@/lib/utils";
 
 import { MUSIC_H, MusicBar, MusicInspector } from "./music-track";
-import { OVERLAY_H, OverlayInspector, OverlayTrack } from "./overlay-editor";
+import { OVERLAY_H, OverlayInspector, OverlayTrack, overlayLanes } from "./overlay-editor";
 import type { EditLog } from "./edit-log";
 import type { OverlaysApi } from "./use-overlays";
 import type { TimelineApi } from "./use-timeline";
@@ -58,9 +58,14 @@ function ToolBtn({ label, hint, onClick, off, disabled, children }: {
 }
 
 /** What the video player's own buttons ask the timeline to do with texts and stickers. */
-export type TimelineHandle = { addText: () => void; addSticker: () => void; duplicate: () => void; remove: () => void };
+export type TimelineHandle = {
+  addText: () => void; addSticker: () => void; duplicate: () => void; remove: () => void;
+  uploadFiles: (files: File[], index?: number) => Promise<void>;   // new videos from the computer, into the timeline
+  insertSource: (src: number, index?: number) => void;             // a video the project already has, into the timeline
+  addLayer: (src: number) => void;                                 // ... or over the picture
+};
 
-export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusic, idx, T, showPlayhead, disabled, onSeekOut, onSelectClip, onTogglePlay, onApply, selOv, setSelOv, inspectorHost, onInspect, handle }: Props) {
+export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusic, idx, T, playing, showPlayhead, disabled, onSeekOut, onSelectClip, onTogglePlay, onApply, selOv, setSelOv, inspectorHost, onInspect, handle }: Props) {
   const duration = p.media?.duration ?? 0;
   const { clips, commit, tweak, undo, redo } = tl;
   const rows = useMemo(() => layout(clips), [clips]);
@@ -71,7 +76,6 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
   const [selected, setSelected] = useState(0);
   const askedFilm = useRef(new Set<number>());
   const [addPct, setAddPct] = useState<number | null>(null);
-  const [confirmDel, setConfirmDel] = useState<number | null>(null);
   const addInput = useRef<HTMLInputElement>(null);
   const extras = p.extra_sources ?? [];
   /** What the timeline needs to know about one video: how long it is, its thumbnails, its name. */
@@ -136,6 +140,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
 
   const del = () => {
     if (selOv) { removeOverlay(); return; }
+    if (selMusic) return;   // Delete on the music bar must not remove a video clip; remove the track in its panel
     if (clips.length <= 1) { toast.info("Phải còn ít nhất một đoạn. Muốn bỏ hết thì xoá video khỏi danh sách."); return; }
     commit(removeAt(clips, sel));
     setSelected(Math.max(0, sel - 1));
@@ -159,6 +164,8 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
 
   // ---- texts and stickers
   const ovItems = overlays.items;
+  const nLanes = Math.max(1, ...overlayLanes(ovItems).map((l) => l + 1));
+  const tracksH = RULER_H + TRACK_H + LINES_H + OVERLAY_H * nLanes + MUSIC_H;
   const selectedOv = ovItems.find((o) => o.id === selOv) ?? null;
   const addOverlay = (kind: "text" | "image", image?: string) => {
     const start = Math.min(showPlayhead ? T : 0, Math.max(0, total - MIN_CLIP));
@@ -171,8 +178,10 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
     onInspect();
   };
   const layerInput = useRef<HTMLInputElement>(null);
+  const playhead = T;
   /** A video laid over the picture from the playhead on (picture in picture). */
-  const addLayer = (src: number) => {
+  const addLayer = (src: number, from?: number) => {
+    const T = from ?? playhead;
     const dur = srcInfo(src).duration;
     const start = Math.min(T, Math.max(0, total - 0.5));
     const o: Overlay = {
@@ -208,20 +217,97 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
     if (!selectedOv) return;
     overlays.change(ovItems.map((o) => (o.id === selOv ? { ...o, x: Math.min(1, Math.max(0, +(o.x + dx).toFixed(3))), y: Math.min(1, Math.max(0, +(o.y + dy).toFixed(3))) } : o)), { key: `nudge${selOv}` });
   };
+  const snapPoints = (self: string | null) => [0, total, playhead,
+    ...rows.flatMap((r) => [r.at, r.at + len(r.clip)]),
+    ...ovItems.filter((o) => o.id !== self).flatMap((o) => [o.start, o.end])];
   const patchOverlay = (patch: Partial<Overlay>) => {
     overlays.change(ovItems.map((o) => (o.id === selOv ? { ...o, ...patch } : o)), { key: `p${selOv}${Object.keys(patch).join()}` });
   };
   const removeOverlay = () => { overlays.change(ovItems.filter((o) => o.id !== selOv), { now: true }); setSelOv(null); };
 
-  const reset = () => { commit(full(duration)); setSelected(0); };
-
+  // ---- videos from the computer / the library: several at once, dropped where they should go
+  const waitIdle = async () => {
+    for (let i = 0; i < 900; i++) {
+      const q = await api.get(p.id);
+      if (!isActive(q)) return q;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    return null;
+  };
+  const uploadFiles = async (files: File[], index?: number) => {
+    const list = files.filter((f) => f.type.startsWith("video/") || /\.(mp4|mov|webm|mkv|m4v)$/i.test(f.name));
+    if (!list.length) { toast.error("Chỉ nhận file video (mp4, mov, webm, mkv)."); return; }
+    let at = index;
+    let ok = 0;
+    for (const [i, f] of list.entries()) {
+      setAddPct(0);
+      try {
+        onApply(await addSource(p.id, f, setAddPct, at === undefined ? {} : { index: at }));
+        ok++;
+        if (at !== undefined) at++;
+        if (i < list.length - 1) { const q = await waitIdle(); if (q) onApply(q); }   // the next one waits while this one is recognised
+      } catch (err) { toast.error(`${f.name}: ${(err as Error).message}`); }
+      finally { setAddPct(null); }
+    }
+    if (ok) toast.success(ok > 1 ? `Đã thêm ${ok} video.` : "Đã thêm video.");
+  };
+  const insertSource = (src: number, index?: number) => {
+    const dur = srcInfo(src).duration;
+    if (!dur) return;
+    const at = index === undefined ? clips.length : Math.min(index, clips.length);
+    const next = [...clips];
+    next.splice(at, 0, { id: uid(), src, start: 0, end: dur });
+    commit(next);
+    setSelected(at);
+    onSelectClip(at);
+  };
+  const uploadLayer = async (f: File, at: number) => {
+    setAddPct(0);
+    try { onApply(await addSource(p.id, f, setAddPct, { layer: { at } })); toast.success("Đã chồng video lên timeline."); }
+    catch (err) { toast.error((err as Error).message); }
+    finally { setAddPct(null); }
+  };
+  const [dropX, setDropX] = useState<number | null>(null);
+  const timeAt = (e: React.DragEvent) => {
+    const host = e.currentTarget as HTMLElement;
+    return Math.min(Math.max((e.clientX - host.getBoundingClientRect().left + host.scrollLeft - 4) / pps, 0), total);
+  };
+  const indexAt = (t: number) => { const k = rows.findIndex((r) => t < r.at + len(r.clip) / 2); return k < 0 ? rows.length : k; };
+  const dragKind = (e: React.DragEvent) => (e.dataTransfer.types.includes("text/lt-src") || e.dataTransfer.types.includes("Files") ? "ok" : null);
+  const onDragOver = (e: React.DragEvent) => {
+    if (disabled || !dragKind(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    const overlayRow = !!(e.target as HTMLElement).closest("[data-track='overlay']");
+    setDropX(overlayRow ? -1 : (rows[indexAt(timeAt(e))]?.at ?? total) * pps);
+  };
+  const onDrop = (e: React.DragEvent) => {
+    if (disabled || !dragKind(e)) return;
+    e.preventDefault();
+    setDropX(null);
+    const t = timeAt(e);
+    const overlayRow = !!(e.target as HTMLElement).closest("[data-track='overlay']");
+    const src = e.dataTransfer.getData("text/lt-src");
+    if (src !== "") {
+      if (overlayRow) addLayer(parseInt(src, 10), t); else insertSource(parseInt(src, 10), indexAt(t));
+      onInspect();
+      return;
+    }
+    const files = Array.from(e.dataTransfer.files);
+    if (overlayRow) { if (files[0]) uploadLayer(files[0], t); } else uploadFiles(files, indexAt(t));
+  };
   useImperativeHandle(handle, () => ({
     addText: () => addOverlay("text"), addSticker, duplicate: () => { if (selectedOv) pasteOverlay(selectedOv); }, remove: removeOverlay,
+    uploadFiles, insertSource, addLayer: (src) => addLayer(src),
   }));
 
+  const reset = () => { commit(full(duration)); setSelected(0); };
+
   // ---- keyboard (not while typing in a box). The listener is set up once and calls the latest handlers.
-  const act = useRef({ cut, del, dup, undo: doUndo, redo: doRedo, onTogglePlay, copy: copyOverlay, paste: pasteOverlay, nudge, deselect: () => setSelOv(null), hasOv: false });
-  useEffect(() => { act.current = { cut, del, dup, undo: doUndo, redo: doRedo, onTogglePlay, copy: copyOverlay, paste: pasteOverlay, nudge, deselect: () => setSelOv(null), hasOv: !!selectedOv }; });
+  const act = useRef({ cut, del, dup, undo: doUndo, redo: doRedo, onTogglePlay, copy: copyOverlay, paste: pasteOverlay, nudge, deselect: () => setSelOv(null), hasOv: false, seek: (d: number): void => { void d; }, to: (t: number): void => { void t; }, zoomBy: (f: number): void => { void f; } });
+  useEffect(() => { act.current = { cut, del, dup, undo: doUndo, redo: doRedo, onTogglePlay, copy: copyOverlay, paste: pasteOverlay, nudge, deselect: () => setSelOv(null), hasOv: !!selectedOv,
+      seek: (d: number) => onSeekOut(Math.min(Math.max(T + d, 0), total)), to: (t: number) => onSeekOut(Math.min(Math.max(t, 0), total)),
+      zoomBy: (f: number) => setZoom((z) => Math.min(12, Math.max(1, z * f))) }; });
   useEffect(() => {
     if (disabled) return;
     const on = (e: KeyboardEvent) => {
@@ -243,6 +329,17 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
         a.nudge(e.key === "ArrowLeft" ? -k : e.key === "ArrowRight" ? k : 0, e.key === "ArrowUp" ? -k : e.key === "ArrowDown" ? k : 0);
       }
       else if (e.key === "Escape" && a.hasOv) a.deselect();
+      else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {   // one frame (Shift: one second)
+        e.preventDefault();
+        a.seek((e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 1 : 1 / 30));
+      }
+      else if (e.key === "Home") { e.preventDefault(); a.to(0); }
+      else if (e.key === "End") { e.preventDefault(); a.to(Number.MAX_SAFE_INTEGER); }
+      else if (e.key === "j" || e.key === "J") { e.preventDefault(); a.seek(-5); }
+      else if (e.key === "l" || e.key === "L") { e.preventDefault(); a.seek(5); }
+      else if (e.key === "k" || e.key === "K") { e.preventDefault(); a.onTogglePlay(); }
+      else if (e.key === "+" || e.key === "=") { e.preventDefault(); a.zoomBy(1.25); }
+      else if (e.key === "-") { e.preventDefault(); a.zoomBy(1 / 1.25); }
       else if (e.key === "s" || e.key === "S") { e.preventDefault(); a.cut(); }
       else if (e.key === "d" || e.key === "D") { e.preventDefault(); a.dup(); }
       else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); a.del(); }
@@ -251,6 +348,26 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
     window.addEventListener("keydown", on);
     return () => window.removeEventListener("keydown", on);
   }, [disabled]);
+
+  // Ctrl/⌘ + wheel zooms around the pointer; while playing the view follows the playhead
+  useEffect(() => {
+    const host = box.current?.querySelector<HTMLElement>("[data-tl-scroll]");
+    if (!host) return;
+    const wheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      setZoom((z) => Math.min(12, Math.max(1, z * (e.deltaY < 0 ? 1.15 : 1 / 1.15))));
+    };
+    host.addEventListener("wheel", wheel, { passive: false });
+    return () => host.removeEventListener("wheel", wheel);
+  }, [p.media]);
+  useEffect(() => {
+    if (!playing || !showPlayhead) return;
+    const host = box.current?.querySelector<HTMLElement>("[data-tl-scroll]");
+    if (!host) return;
+    const x = T * pps;
+    if (x < host.scrollLeft + 20 || x > host.scrollLeft + host.clientWidth - 60) host.scrollLeft = Math.max(0, x - 80);
+  }, [T, pps, playing, showPlayhead]);
 
   // ---- playhead: click or drag on the ruler / tracks
   const scrub = (e: React.PointerEvent<HTMLElement>) => {
@@ -290,11 +407,13 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
   };
 
   // ---- reorder: drag a clip sideways past its neighbour
+  // the grabbed clip follows the pointer as a see-through copy; the others slide apart to leave a gap its length
+  const [drag, setDrag] = useState<{ i: number; target: number; dx: number } | null>(null);
   const startMove = (e: React.PointerEvent, i: number) => {
     if (disabled || clips.length < 2) return;
     const before = clips;
     const x0 = e.clientX;
-    let at = i;
+    let target = i;
     let moved = false;
     const move = (ev: PointerEvent) => {
       const dx = ev.clientX - x0;
@@ -302,15 +421,16 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
       moved = true;
       const r = layout(before);
       const center = r[i].at * pps + (len(before[i]) * pps) / 2 + dx;
-      let target = 0;
-      r.forEach((row, k) => { if (k !== i && center > row.at * pps + (len(row.clip) * pps) / 2) target = k + (k < i ? 1 : 0); });
-      if (target !== at) { at = target; tl.preview(moveClip(before, i, target)); setSelected(target); }
+      let t = 0;
+      r.forEach((row, k) => { if (k !== i && center > row.at * pps + (len(row.clip) * pps) / 2) t = k + (k < i ? 1 : 0); });
+      target = t;
+      setDrag({ i, target, dx });
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      if (moved && at !== i) { tl.settle(before); }
-      else tl.preview(before);
+      setDrag(null);
+      if (moved && target !== i) { commit(moveClip(before, i, target)); setSelected(target); onSelectClip(target); }
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -330,18 +450,10 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
         <ToolBtn disabled={disabled} label="Nhân đôi đoạn đang chọn" hint="D" onClick={dup}><Copy /></ToolBtn>
         <span className="mx-1 h-5 w-px bg-border" />
         <ToolBtn disabled={disabled} label="Thêm khoảng trống 2 giây sau đoạn đang chọn" hint="màn đen, không tiếng" onClick={addGap}><SquareDashed /></ToolBtn>
-        <ToolBtn disabled={disabled || isActive(p) || addPct !== null} label="Thêm video khác vào cuối timeline" hint="nếu dự án đã dịch thì nhận dạng và dịch lời luôn"
+        <ToolBtn disabled={disabled || isActive(p) || addPct !== null} label="Thêm video (chọn được nhiều file) vào cuối timeline, hoặc kéo file thả vào timeline" hint="dự án đã dịch thì nhận dạng và dịch lời luôn"
           onClick={() => addInput.current?.click()}>{addPct !== null ? <Loader2 className="animate-spin" /> : <Video />}</ToolBtn>
-        <input ref={addInput} type="file" hidden accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mkv,.m4v"
-          onChange={async (e) => {
-            const f = e.target.files?.[0];
-            e.target.value = "";
-            if (!f) return;
-            setAddPct(0);
-            try { onApply(await addSource(p.id, f, setAddPct)); toast.success("Đã thêm video, đang nhận dạng và dịch lời."); }
-            catch (err) { toast.error((err as Error).message); }
-            finally { setAddPct(null); }
-          }} />
+        <input ref={addInput} type="file" hidden multiple accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mkv,.m4v"
+          onChange={(e) => { const fs = Array.from(e.target.files ?? []); e.target.value = ""; if (fs.length) uploadFiles(fs); }} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <span><IconButton label="Chồng video lên trên (hình trong hình) từ đường chỉ" variant="outline" disabled={disabled}><Layers /></IconButton></span>
@@ -359,7 +471,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
             e.target.value = "";
             if (!f) return;
             setAddPct(0);
-            try { onApply(await addSource(p.id, f, setAddPct, { at: T })); toast.success("Đã chồng video lên timeline."); }
+            try { onApply(await addSource(p.id, f, setAddPct, { layer: { at: T } })); toast.success("Đã chồng video lên timeline."); }
             catch (err) { toast.error((err as Error).message); }
             finally { setAddPct(null); }
           }} />
@@ -382,6 +494,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
             Bấm vào thanh hoặc kéo đường chỉ để chọn vị trí. Kéo hai mép một đoạn để cắt bớt, kéo cả đoạn sang cạnh để đổi thứ tự.
             Các câu lồng tiếng nằm trong phần bị cắt sẽ tự bỏ, câu còn lại tự dời theo. Video gốc không bị đổi; bấm Xuất để ra bản đã cắt ghép.
             Đoạn ngắn nhất {MIN_CLIP} giây.
+            <span className="mt-1.5 block opacity-80">Phím tắt: Space/K phát · S cắt · D nhân đôi · Delete xoá · ← → một khung hình (Shift: một giây) · J/L lùi/tiến 5 giây · Home/End · +/− hoặc Ctrl/⌘ cuộn chuột để zoom · Ctrl/⌘ Z hoàn tác.</span>
           </TooltipContent>
         </Tooltip>
         {clock(showPlayhead ? T : 0)} / {clock(total)}
@@ -390,34 +503,12 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
       </p>
 
       {addPct !== null && <p className="text-xs text-muted-foreground">Đang tải video lên… {Math.round(addPct * 100)}%</p>}
-      {extras.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-muted-foreground">Video đã thêm:</span>
-          {extras.map((e) => (
-            <span key={e.id} className="flex items-center gap-1 rounded-full border px-2 py-1">
-              <Video className="size-3" /> <span className="max-w-32 truncate" title={e.name}>{e.name}</span> · {clock(e.duration)}
-              {e.has_audio && !p.segments.some((s) => (s.src_id ?? 0) === e.id) && (
-                <button type="button" disabled={disabled || isActive(p) || p.status.stage === "new"} className="rounded p-0.5 text-fast-foreground hover:bg-accent"
-                  title="Video này chưa có lời thoại: nhận dạng và dịch lại"
-                  onClick={() => api.retrySource(p.id, e.id).then(onApply).catch((err) => toast.error((err as Error).message))}><RotateCw className="size-3" /></button>
-              )}
-              <button type="button" disabled={disabled} className="rounded p-0.5 hover:bg-accent" title="Chèn vào cuối timeline"
-                onClick={() => { commit([...clips, { id: uid(), src: e.id, start: 0, end: e.duration }]); setSelected(clips.length); }}><Plus className="size-3" /></button>
-              <button type="button" disabled={disabled || isActive(p)} className={cn("rounded p-0.5 hover:bg-accent", confirmDel === e.id && "bg-destructive/15 text-destructive")}
-                title={confirmDel === e.id ? "Bấm lần nữa để gỡ hẳn video này" : "Gỡ video khỏi dự án"}
-                onClick={() => {
-                  if (confirmDel !== e.id) { setConfirmDel(e.id); setTimeout(() => setConfirmDel((c) => (c === e.id ? null : c)), 3500); return; }
-                  setConfirmDel(null);
-                  api.deleteSource(p.id, e.id).then(onApply).catch((err) => toast.error((err as Error).message));
-                }}><Trash2 className="size-3" /></button>
-            </span>
-          ))}
-        </div>
-      )}
-
       <div ref={box} className="rounded-xl border bg-muted/30">
-        <div data-tl-scroll className="relative overflow-x-auto overflow-y-hidden px-1 pb-2" style={{ height: RULER_H + TRACK_H + LINES_H + OVERLAY_H + MUSIC_H + 30 }}>
+        <div data-tl-scroll onDragOver={onDragOver} onDragLeave={() => setDropX(null)} onDrop={onDrop} className="relative overflow-x-auto overflow-y-hidden px-1 pb-2" style={{ height: tracksH + 30 }}>
           <div className="relative" style={{ width: contentW, height: "100%" }}>
+            {dropX !== null && dropX >= 0 && (
+              <div className="pointer-events-none absolute top-0 z-20 w-0.5 bg-primary" style={{ left: dropX, height: RULER_H + TRACK_H + LINES_H + 8 }} />
+            )}
             {/* ruler */}
             <div className="relative cursor-pointer select-none" style={{ height: RULER_H }} onPointerDown={scrub}>
               {ticks.map((t) => (
@@ -429,7 +520,21 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
 
             {/* video track */}
             <div className="relative mt-1" style={{ height: TRACK_H }} onPointerDown={scrub}>
-              {rows.map(({ clip, at }, i) => {
+              {drag && (() => {   // where the grabbed clip will land
+                const rest = clips.filter((_, k) => k !== drag.i);
+                const rr = layout(rest);
+                const x = drag.target < rest.length ? rr[drag.target].at : rest.length ? rr[rr.length - 1].at + len(rr[rr.length - 1].clip) : 0;
+                return <div className="pointer-events-none absolute top-0 rounded-md border-2 border-dashed border-primary/70 bg-primary/10 transition-[left] duration-150"
+                  style={{ left: x * pps, width: Math.max(len(clips[drag.i]) * pps - 2, 4), height: TRACK_H }} />;
+              })()}
+              {rows.map(({ clip, at: at0 }, i) => {
+                let at = at0;
+                const ghost = drag?.i === i;
+                if (drag && !ghost) {   // make room: clips from the landing spot on move by the grabbed clip's length
+                  const rest = clips.filter((_, k) => k !== drag.i);
+                  const k = i < drag.i ? i : i - 1;
+                  at = layout(rest)[k].at + (k >= drag.target ? len(clips[drag.i]) : 0);
+                } else if (ghost) at = Math.max(0, at0 + drag.dx / pps);
                 const w = len(clip) * pps;
                 const info = srcInfo(srcOf(clip));
                 return (
@@ -438,6 +543,8 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
                       "group absolute top-0 overflow-hidden rounded-md border-2 bg-secondary text-left shadow-sm",
                       sel === i ? "border-primary" : "border-border",
                       i === idx && showPlayhead && "ring-1 ring-primary/40",
+                      drag && !ghost && "transition-[left] duration-150",
+                      ghost && "z-30 opacity-60 shadow-lg",
                       disabled ? "cursor-default" : "cursor-grab active:cursor-grabbing",
                     )}
                     style={{
@@ -452,10 +559,11 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
                       setSelOv(null);
                       setSelMusic(false);
                       onSelectClip(i);
-                      onInspect();
+                      if (isGap(clip)) onInspect();   // a plain click also seeks: do not pull you out of the panel you are in
                       startMove(e, i);
                     }}
                     onKeyDown={(e) => { if (e.key === "Enter") setSelected(i); }}
+                    onDoubleClick={onInspect}
                   >
                     {!info.film && !isGap(clip) && <Loader2 className="m-2 size-4 animate-spin text-muted-foreground" />}
                     <span className="pointer-events-none absolute bottom-0.5 left-1 max-w-[90%] truncate rounded bg-black/55 px-1 text-[10px] font-medium text-white">
@@ -498,7 +606,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
             </div>
 
             {/* texts and stickers */}
-            <OverlayTrack items={ovItems} pps={pps} total={total} selectedId={selOv} disabled={disabled} srcDuration={(s) => srcInfo(s).duration}
+            <OverlayTrack items={ovItems} pps={pps} total={total} selectedId={selOv} disabled={disabled} snaps={snapPoints(selOv)} srcDuration={(s) => srcInfo(s).duration}
               onSelect={(id) => { setSelOv(id); setSelMusic(false); onInspect(); }} onChange={(next) => { overlays.change(next, { key: `drag${selOv}` }); }} onScrub={scrub} />
 
             {/* background music */}
@@ -507,7 +615,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
 
             {/* playhead */}
             {showPlayhead && (
-              <div className="pointer-events-none absolute top-0 z-10" style={{ left: T * pps, height: RULER_H + TRACK_H + LINES_H + OVERLAY_H + MUSIC_H + 16 }}>
+              <div className="pointer-events-none absolute top-0 z-10" style={{ left: T * pps, height: tracksH + 16 }}>
                 <div className="h-full w-0.5 -translate-x-1/2 bg-primary" />
                 <div className="absolute -top-0.5 left-0 size-3 -translate-x-1/2 rounded-full bg-primary" />
               </div>

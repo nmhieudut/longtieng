@@ -13,7 +13,7 @@ import { VoicePicker } from "@/components/voice-picker";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api, stillUrl, voicesFor } from "@/lib/api";
 
-import { ColorSection, FrameSection, LogoSection, ScriptSection, SubStylePicker } from "./look-sections";
+import { ColorSection, ExportSection, FrameSection, LogoSection, ScriptSection, SubStylePicker } from "./look-sections";
 import { MusicSection } from "./music-section";
 import { Field, Section, SliderField } from "./settings-ui";
 import type { DeepPartial, Project, Settings, VoiceInfo } from "@/lib/api";
@@ -24,6 +24,7 @@ type Props = {
   handle?: Ref<SettingsHandle>;                // lets the action bar save pending edits before it acts
   sourceLangs: Record<string, string>;
   langLocked: boolean;
+  canHw: boolean;                              // this ffmpeg can encode with the Mac's hardware
   previewAt: number;                           // video time used for the still preview
   subStyles: Record<string, string>;
   reviewStyles: Record<string, string>;
@@ -42,11 +43,11 @@ type Props = {
 
 export type SettingsHandle = { flush: () => Promise<void> };
 
-export const SECTION_IDS = ["dub", "music", "subs", "look"] as const;
+export const SECTION_IDS = ["dub", "audio", "subs", "look", "export"] as const;
 export type SectionId = (typeof SECTION_IDS)[number];
 
 export function SettingsPanel({
-  projectId, section, handle, sourceLangs, langLocked, previewAt, subStyles, reviewStyles, targetLangs, translatedTo,
+  projectId, section, handle, sourceLangs, langLocked, canHw, previewAt, subStyles, reviewStyles, targetLangs, translatedTo,
   settings, voices, canDemucs, disabled, busy, onDraft, onSave, maskDetect, onDetect,
 }: Props) {
   const [detecting, setDetecting] = useState(false);
@@ -128,7 +129,7 @@ export function SettingsPanel({
   const show = (id: SectionId) => ({ hidden: section !== id, className: "border-b py-1 last:border-b-0" });
   return (
     <div className="flex h-full min-h-0 flex-col">
-    <div className="flex items-center gap-1 border-b px-3 py-1.5">
+    <div className="flex items-center gap-1 border-b px-3 py-1.5" hidden={!disabled && section !== "look" && section !== "subs"}>
       {disabled && (
         <p className="mr-auto text-xs text-muted-foreground">Đang xử lý nên tạm khoá cài đặt.</p>
       )}
@@ -162,7 +163,7 @@ export function SettingsPanel({
       </Section></div>
 
 
-      <div {...show("dub")}><Section value="audio" icon={<Volume2 />} title="Âm thanh gốc"
+      <div {...show("audio")}><Section value="audio" icon={<Volume2 />} title="Âm thanh gốc"
         summary={s.audio_mode === "mute" ? "Tắt" : `${s.audio_mode === "duck" ? "Giảm nhỏ" : "Giữ nhạc nền"} · ${Math.round(s.orig_volume * 100)}%`}>
         <ToggleGroup type="single" variant="outline" className="w-full" disabled={disabled}
           value={s.audio_mode} onValueChange={(v) => v && change({ audio_mode: v as Settings["audio_mode"] })}>
@@ -183,9 +184,9 @@ export function SettingsPanel({
         )}
       </Section></div>
 
-      <div {...show("music")}><MusicSection music={s.music} disabled={disabled} onChange={(m) => change({ music: m })} /></div>
+      <div {...show("audio")}><MusicSection music={s.music} disabled={disabled} onChange={(m) => change({ music: m })} /></div>
 
-      <div {...show("subs")}><Section value="subs" icon={<Captions />} title="Phụ đề"
+      <div {...show("subs")}>{!langLocked && <p className="mx-0 mb-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">Chưa có lời thoại nên chưa có phụ đề để chỉnh. Dịch & lồng tiếng trước; phần che phụ đề gốc ở dưới dùng được ngay.</p>}<Section value="subs" icon={<Captions />} title="Phụ đề"
         summary={s.subtitle_mode === "burn" ? `Ghi vào video · ${s.sub_size.toFixed(1)}×` : s.subtitle_mode === "srt" ? "Chỉ file .srt" : "Không"}>
         <ToggleGroup type="single" variant="outline" className="w-full" disabled={disabled}
           value={s.subtitle_mode} onValueChange={(v) => v && change({ subtitle_mode: v as Settings["subtitle_mode"] })}>
@@ -206,6 +207,7 @@ export function SettingsPanel({
         )}
       </Section></div>
 
+      <div {...show("export")}><ExportSection s={s} canHw={canHw} disabled={disabled} change={change} /></div>
       <div {...show("look")}><FrameSection s={s} disabled={disabled} change={change} preview={null} /></div>
       <div {...show("look")}><ColorSection s={s} disabled={disabled} change={change} /></div>
       <div {...show("look")}><LogoSection s={s} disabled={disabled} change={change} /></div>
@@ -263,4 +265,4 @@ export function SettingsPanel({
   );
 }
 
-const NESTED = ["mask", "music", "frame", "color", "logo", "script"] as const;
+const NESTED = ["mask", "music", "frame", "color", "logo", "script", "export"] as const;

@@ -1,11 +1,12 @@
 "use client";
 
-import { Crop, ImagePlus, Loader2, Palette, RotateCcw, Sparkles, Stamp, Trash2 } from "lucide-react";
+import { Crop, ImagePlus, Loader2, Palette, RotateCcw, Rocket, Sparkles, Stamp, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { api, type DeepPartial, type Logo, logoUrl, type Settings } from "@/lib/api";
@@ -287,6 +288,54 @@ export function ColorSection({ s, disabled, change }: { s: Settings; disabled: b
           <RotateCcw /> Về gốc
         </Button>
       </div>
+    </Section>
+  );
+}
+
+
+/** Where the video is going: the platform sets the picture shape, then how hard to squeeze it. */
+const PLATFORMS: { label: string; aspect: Settings["frame"]["aspect"]; hint: string }[] = [
+  { label: "TikTok · Reels · Shorts", aspect: "9:16", hint: "dọc 9:16" },
+  { label: "Facebook · Instagram feed", aspect: "4:5", hint: "4:5" },
+  { label: "Vuông", aspect: "1:1", hint: "1:1" },
+  { label: "YouTube · ngang", aspect: "16:9", hint: "16:9" },
+  { label: "Giữ nguyên khung gốc", aspect: "original", hint: "như video gốc" },
+];
+
+export function ExportSection({ s, canHw, disabled, change }: { s: Settings; canHw: boolean; disabled: boolean; change: Change }) {
+  const ex = s.export;
+  return (
+    <Section value="export" icon={<Rocket />} title="Xuất video"
+      summary={`${PLATFORMS.find((p) => p.aspect === s.frame.aspect)?.hint ?? s.frame.aspect} · ${{ fast: "nhanh", balanced: "cân bằng", high: "chất lượng cao" }[ex.quality]}`}>
+      <Field label="Đăng lên đâu (chọn khung hình)">
+        <div className="grid gap-1.5">
+          {PLATFORMS.map((p) => (
+            <Button key={p.aspect} type="button" size="sm" disabled={disabled} variant={s.frame.aspect === p.aspect ? "secondary" : "outline"}
+              className="justify-between" onClick={() => change({ frame: { aspect: p.aspect } })}>
+              <span>{p.label}</span><span className="text-xs text-muted-foreground">{p.hint}</span>
+            </Button>
+          ))}
+        </div>
+      </Field>
+      <Field label="Chất lượng">
+        <ToggleGroup type="single" variant="outline" className="w-full" disabled={disabled} value={ex.quality}
+          onValueChange={(v) => v && change({ export: { quality: v as Settings["export"]["quality"] } })}>
+          <ToggleGroupItem value="fast" className="flex-1">Nhanh</ToggleGroupItem>
+          <ToggleGroupItem value="balanced" className="flex-1">Cân bằng</ToggleGroupItem>
+          <ToggleGroupItem value="high" className="flex-1">Cao</ToggleGroupItem>
+        </ToggleGroup>
+      </Field>
+      {canHw && (
+        <label className="flex items-center justify-between gap-3 text-sm">
+          <span>Mã hoá bằng phần cứng của Mac<span className="block text-xs text-muted-foreground">Nhanh hơn nhiều, file hơi lớn hơn.</span></span>
+          <Switch checked={ex.hw} disabled={disabled} onCheckedChange={(v) => change({ export: { hw: v } })} />
+        </label>
+      )}
+      <label className="flex items-center justify-between gap-3 text-sm">
+        <span>Chuẩn hoá âm lượng (−14 LUFS)<span className="block text-xs text-muted-foreground">Mức TikTok, Reels, Shorts phát; bớt chỗ to chỗ nhỏ. Bản xem thử không áp dụng.</span></span>
+        <Switch checked={ex.loudnorm} disabled={disabled} onCheckedChange={(v) => change({ export: { loudnorm: v } })} />
+      </label>
+      <p className="text-xs text-muted-foreground">Thư mục lưu video đặt ở biểu tượng bánh răng trên cùng.</p>
     </Section>
   );
 }

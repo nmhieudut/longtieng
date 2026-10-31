@@ -114,7 +114,7 @@ def _check_settings(s: dict, new: bool = False) -> dict:
     mu = s.get("music")
     nested = {("frame", "aspect"): {"original", *ASPECTS}, ("frame", "fit"): {"blur", "crop"},
               ("logo", "position"): {"tl", "tr", "bl", "br"},
-              ("script", "mode"): {"translate", "review"}, ("script", "style"): set(translate.REVIEW_STYLES)}
+              ("export", "quality"): {"fast", "balanced", "high"}, ("script", "mode"): {"translate", "review"}, ("script", "style"): set(translate.REVIEW_STYLES)}
     for (k, f), allowed in nested.items():
         if isinstance(s.get(k), dict) and f in s[k] and s[k][f] not in allowed:
             raise HTTPException(400, f"Giá trị không hợp lệ cho {k}.{f}: {s[k][f]!r}")
@@ -154,7 +154,7 @@ def config():
         "max_upload_mb": MAX_UPLOAD_MB,
         "max_duration_min": MAX_DURATION_MIN,
         "translator": f"OpenAI ({OPENAI_MODEL})" if openai_key() else "Google Dịch (chưa nhập OpenAI API key)",
-        "features": {"demucs": demucs_available()},
+        "features": {"demucs": demucs_available(), "hw_encoder": render.hw_encoder_available()},
         "langs": {k: v["label"] for k, v in SOURCE_LANGS.items()},
         "target_langs": {k: {"label": v["label"], "voice": v["voice"]} for k, v in TARGET_LANGS.items()},
         "sub_styles": {k: v["label"] for k, v in render.SUB_STYLES.items()},
@@ -752,19 +752,21 @@ def make_filmstrip(pid: str, src: int = 0):
     return _view(store.update(pid, fn))
 
 
-MAX_EXTRA_SOURCES = 8
+MAX_EXTRA_SOURCES = 16
 
 
-def _add_clip(p: dict, entry: dict) -> list[dict]:
-    """The project's clips with the whole new video put at the end (ValueError if that makes it too long)."""
+def _add_clip(p: dict, entry: dict, index: int = -1) -> list[dict]:
+    """The project's clips with the whole new video put at `index` (default: the end). ValueError if that makes it too long."""
     clips = timeline.clips_of(p) or [{"id": "full", "start": 0, "end": p["media"]["duration"]}]
-    clips = clips + [{"id": f"s{entry['id']}", "src": entry["id"], "start": 0, "end": entry["duration"]}]
+    new = {"id": f"s{entry['id']}", "src": entry["id"], "start": 0, "end": entry["duration"]}
+    at = len(clips) if index < 0 else min(index, len(clips))
+    clips = clips[:at] + [new] + clips[at:]
     durs = timeline.source_durations(p) | {entry["id"]: entry["duration"]}
     return timeline.validate(clips, p["media"]["duration"], durs, MAX_DURATION_MIN * 60)
 
 
 @app.post("/api/projects/{pid}/sources")
-def add_source(pid: str, file: UploadFile = File(...), as_layer: bool = Form(False), at: float = Form(0.0)):
+def add_source(pid: str, file: UploadFile = File(...), as_layer: bool = Form(False), at: float = Form(0.0), index: int = Form(-1)):
     """Add another video to the project: it goes at the end of the timeline and its speech is recognised and
     translated like the main video's. as_layer: it is laid over the picture from second `at` instead (picture in
     picture), with nothing to recognise."""
@@ -799,7 +801,7 @@ def add_source(pid: str, file: UploadFile = File(...), as_layer: bool = Form(Fal
                  "width": info["width"], "height": info["height"], "has_audio": info["has_audio"]}
         # (checked again below on the timeline as it is when the upload has finished: it stays editable meanwhile)
         if not as_layer:
-            _add_clip(p, entry)
+            _add_clip(p, entry, index)
     except MediaError as e:
         dst.unlink(missing_ok=True)
         raise HTTPException(400, str(e))
@@ -819,7 +821,7 @@ def add_source(pid: str, file: UploadFile = File(...), as_layer: bool = Form(Fal
                                               "x": 0.75, "y": 0.25, "size": 0.4}],
                 timeline.source_durations(q))
         else:
-            q["timeline"] = {"clips": _add_clip(q, entry)}   # from the CURRENT clips, so edits made during the upload stay
+            q["timeline"] = {"clips": _add_clip(q, entry, index)}   # from the CURRENT clips, so edits made during the upload stay
         q["edited_at"] = time.time()
     try:
         store.update(pid, fn)

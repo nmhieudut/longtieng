@@ -18,6 +18,7 @@ import { IconButton } from "@/components/ui/icon-button";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, desktopApi, fileUrl, fmt, isActive, type Project, STAGE_LABEL } from "@/lib/api";
+import { totalLen } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 
 import { StageBadge } from "./stage-badge";
@@ -125,7 +126,7 @@ export function ActionBar({ project: p, previewAt, onStart, onPreview, onRender,
         {final ? (
           <span className={cn("flex items-center gap-1.5 font-medium", stale ? "text-fast-foreground" : "text-ok")}>
             {stale ? <AlertTriangle className="size-3.5" /> : <CheckCircle2 className="size-3.5" />}
-            {stale ? "Có thay đổi chưa xuất lại" : `Video đã xuất · ${fmt(p.media?.duration ?? 0)} · ${ago(final.at!)}`}
+            {stale ? "Có thay đổi chưa xuất lại" : `Video đã xuất · ${fmt(p.timeline?.clips?.length ? totalLen(p.timeline.clips) : p.media?.duration ?? 0)} · ${ago(final.at!)}`}
           </span>
         ) : <span className="font-medium">{editOnly ? "Chỉnh sửa rồi xuất luôn · dịch và lồng tiếng là tuỳ chọn" : "Sẵn sàng lồng tiếng"}</span>}
         {!s.error && s.message.startsWith("Đã huỷ") && <span className="text-muted-foreground">{s.message}</span>}

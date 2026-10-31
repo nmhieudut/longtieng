@@ -51,6 +51,10 @@ def clean_settings(s: dict) -> dict:
     s["orig_volume"] = min(1.0, max(0.0, float(s["orig_volume"])))
     s["sub_size"] = min(2.0, max(0.5, float(s["sub_size"])))
     s["sub_margin"] = min(50, max(0, float(s["sub_margin"])))
+    ex = s["export"]
+    ex["hw"], ex["loudnorm"] = bool(ex["hw"]), bool(ex["loudnorm"])
+    if ex["quality"] not in ("fast", "balanced", "high"):
+        ex["quality"] = "balanced"
     mu = s["music"]
     mu["volume"] = min(1.0, max(0.0, float(mu["volume"])))
     mu["start"] = max(0.0, float(mu["start"]))
@@ -78,7 +82,7 @@ def clean_settings(s: dict) -> dict:
 
 # Settings worth carrying over to new videos ("Lưu làm mặc định"); the subtitle band is per video.
 DEFAULT_KEYS = ("lang", "target", "voice", "rate", "audio_mode", "orig_volume", "subtitle_mode", "sub_size", "sub_margin",
-                "music", "frame", "color", "logo", "sub_style", "script")
+                "music", "frame", "color", "logo", "export", "sub_style", "script")
 
 
 def user_defaults() -> dict:

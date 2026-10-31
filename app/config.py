@@ -334,6 +334,11 @@ DEFAULT_SETTINGS = {
         "size": 0.16,          # logo width as a fraction of the video width
         "opacity": 0.85,
     },
+    "export": {
+        "quality": "balanced", # "fast" | "balanced" | "high"
+        "hw": True,            # use the Mac's hardware encoder when this ffmpeg has it (much faster)
+        "loudnorm": False,     # even out the loudness to -14 LUFS, what TikTok / Reels / Shorts play at
+    },
     "sub_style": "classic",    # see render.SUB_STYLES
     "script": {
         "mode": "translate",   # "translate": faithful | "review": AI narration in a chosen style
