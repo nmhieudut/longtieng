@@ -222,7 +222,7 @@ export function ActionBar({ project: p, previewAt, onStart, onPreview, onRender,
           <AlertDialogHeader>
             <AlertDialogTitle>Viết lại toàn bộ lời thoại?</AlertDialogTitle>
             <AlertDialogDescription>
-              Các câu bạn đã sửa tay sẽ bị thay bằng bản dịch mới theo ngôn ngữ và chế độ trong tab “Ngôn ngữ”.
+              Các câu bạn đã sửa tay sẽ bị thay bằng bản dịch mới theo ngôn ngữ và chế độ trong mục Lồng tiếng.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

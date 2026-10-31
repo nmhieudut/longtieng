@@ -1,12 +1,14 @@
 "use client";
 
-import { AudioLines, SlidersHorizontal, Captions, EyeOff, Frame, ImageIcon, Languages, Mic, Music, Palette, Send, Sparkles, WifiOff } from "lucide-react";
+import { SlidersHorizontal, Captions, Languages, Mic, Music, Palette, Send, WifiOff } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { IconButton } from "@/components/ui/icon-button";
+import { ResizeHandle } from "@/components/ui/resize-handle";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, type Config, type DeepPartial, fileUrl, isActive, type Project, type Settings } from "@/lib/api";
 
@@ -23,6 +25,14 @@ import { locate, mapLines, totalLen } from "@/lib/timeline";
 import { useTimeline } from "./use-timeline";
 import { VideoPanel, type VideoView } from "./video-panel";
 
+// pane sizes: fractions of the area, kept between limits so one pane can never swallow another
+const MIN_RIGHT_PX = 320, MAX_RIGHT = 0.55, MIN_TL_PX = 190, MIN_VIDEO_PX = 280;
+const DEFAULT_RIGHT = 0.3, DEFAULT_TL = 0.4;
+const clampFrac = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+function readFrac(key: string, fallback: number) {
+  try { const v = parseFloat(localStorage.getItem(key) ?? ""); return Number.isFinite(v) && v > 0.1 && v < 0.9 ? v : fallback; } catch { return fallback; }
+}
+
 // the timeline hooks must run before the "still loading" early return; they never save without a real project
 const NO_PROJECT = { id: "", media: null, segments: [] } as unknown as Project;
 
@@ -33,10 +43,18 @@ export function ProjectView({ id }: { id: string }) {
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [tabSel, setTab] = useState<string | null>(null);
+  const [dubSel, setDubView] = useState<"lines" | "config" | null>(null);   // inside Lồng tiếng: the lines or the settings
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const settingsRef = useRef<SettingsHandle>(null);
   const tlRef = useRef<TimelineHandle>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const leftRef = useRef<HTMLDivElement>(null);
+  const [rightFrac, setRightFrac] = useState(() => readFrac("lt.right", DEFAULT_RIGHT));
+  const [tlFrac, setTlFrac] = useState(() => readFrac("lt.timeline", DEFAULT_TL));
+  useEffect(() => {
+    try { localStorage.setItem("lt.right", String(rightFrac)); localStorage.setItem("lt.timeline", String(tlFrac)); } catch { /* private window */ }
+  }, [rightFrac, tlFrac]);
   const [selOv, setSelOv] = useState<string | null>(null);
   const [inspectorHost, setInspectorHost] = useState<HTMLElement | null>(null);
   const [draft, setDraft] = useState<Settings | null>(null);
@@ -220,8 +238,9 @@ export function ProjectView({ id }: { id: string }) {
   const previewAt = view === "preview" || loadedSrc !== 0 ? 0 : time;   // main video time (still preview, cover)
   const outAt = view === "preview" ? 0 : tl.edited && view === "source" ? clipPlay.T : time;  // output time (30 s preview)
   const fresh = p.status.stage === "new" && p.segments.length === 0;
-  const tab = tabSel ?? (fresh ? "color" : "lines");
+  const tab = tabSel ?? (fresh ? "look" : "dub");
   const locked = busy && RENDER_STAGES.includes(p.status.stage);
+  const dubView = dubSel ?? (p.segments.length ? "lines" : "config");
   const sectionTab = (SECTION_IDS as readonly string[]).includes(tab) ? (tab as SectionId) : null;
   const flushAll = async () => {
     const a = document.activeElement;
@@ -229,17 +248,11 @@ export function ProjectView({ id }: { id: string }) {
      await settingsRef.current?.flush(); await tl.flush(); await overlays.flush(); };
 
   const RAIL: { id: string; label: string; icon: React.ReactNode }[] = [
-    { id: "lines", label: `Bản dịch${p.segments.length ? ` (${p.segments.length})` : ""}`, icon: <Languages /> },
     { id: "props", label: "Thuộc tính đoạn / chữ / nhạc đang chọn", icon: <SlidersHorizontal /> },
-    { id: "script", label: "Dịch & lồng tiếng (tuỳ chọn)", icon: <Sparkles /> },
-    { id: "voice", label: "Giọng đọc", icon: <Mic /> },
-    { id: "audio", label: "Âm thanh gốc", icon: <AudioLines /> },
+    { id: "dub", label: `Lồng tiếng: bản dịch, giọng đọc, âm thanh gốc (tuỳ chọn)`, icon: <Mic /> },
     { id: "music", label: "Nhạc nền", icon: <Music /> },
-    { id: "subs", label: "Phụ đề", icon: <Captions /> },
-    { id: "frame", label: "Khung hình", icon: <Frame /> },
-    { id: "color", label: "Chỉnh màu", icon: <Palette /> },
-    { id: "logo", label: "Logo", icon: <ImageIcon /> },
-    { id: "mask", label: "Che phụ đề gốc", icon: <EyeOff /> },
+    { id: "subs", label: "Phụ đề và che phụ đề gốc", icon: <Captions /> },
+    { id: "look", label: "Hình ảnh: khung hình, màu, logo", icon: <Palette /> },
     { id: "publish", label: "Đăng Reels", icon: <Send /> },
   ];
 
@@ -262,7 +275,8 @@ export function ProjectView({ id }: { id: string }) {
         onPreview={() => { pendingShow.current = "preview"; run(async () => { await flushAll(); return api.render(id, outAt); }); }}
         onRender={() => { pendingShow.current = "final"; run(async () => { await flushAll(); return api.render(id, null); }); }}
         onJump={(i) => {
-          setTab("lines");
+          setTab("dub");
+          setDubView("lines");
           seekAt(p.segments[i].src_id ?? 0, p.segments[i].start + 0.01);
           setTimeout(() => {
             const row = document.querySelector<HTMLElement>(`[data-idx="${i}"]`);
@@ -273,9 +287,11 @@ export function ProjectView({ id }: { id: string }) {
       />
 
       {/* 7 : 3 and as tall as the window. Left: the picture with its player bar, and the timeline. Right: a rail of icons, one panel. */}
-      <div className="grid min-h-0 flex-1 gap-2 lg:grid-cols-[minmax(0,7fr)_minmax(340px,3fr)] [&>*]:min-w-0">
-        <div className="flex min-h-0 flex-col gap-2 [&>*]:min-w-0">
-          <Card className="h-[48vh] min-h-[220px] p-2 sm:p-2 lg:h-auto lg:min-h-0 lg:flex-[3]">
+      <div ref={gridRef} className="grid min-h-0 flex-1 gap-2 lg:gap-0 lg:[grid-template-columns:minmax(0,1fr)_0.5rem_var(--rw)] [&>*]:min-w-0"
+        style={{ "--rw": `${(rightFrac * 100).toFixed(2)}%` } as React.CSSProperties}>
+        <div ref={leftRef} className="flex min-h-0 flex-col gap-2 lg:gap-0 [&>*]:min-w-0"
+          style={{ "--th": `${(tlFrac * 100).toFixed(2)}%` } as React.CSSProperties}>
+          <Card className="h-[48vh] min-h-[220px] p-2 sm:p-2 lg:h-auto lg:min-h-[280px] lg:flex-1">
             <VideoPanel
               project={p}
               videoRef={videoRef}
@@ -313,7 +329,14 @@ export function ProjectView({ id }: { id: string }) {
               onLoaded={onLoaded}
             />
           </Card>
-          <Card className="gap-0 overflow-hidden p-0 lg:min-h-0 lg:flex-[2]">
+          <ResizeHandle orientation="horizontal" label="Kéo để đổi chiều cao timeline" className="hidden lg:block"
+            onReset={() => setTlFrac(DEFAULT_TL)}
+            onMove={(_, y) => {
+              const r = leftRef.current?.getBoundingClientRect();
+              if (!r) return;
+              setTlFrac(clampFrac((r.bottom - y - 4) / r.height, MIN_TL_PX / r.height, 1 - MIN_VIDEO_PX / r.height));
+            }} />
+          <Card className="gap-0 overflow-hidden p-0 lg:h-[var(--th)] lg:min-h-[190px] lg:flex-none">
             <div className="min-h-0 flex-1 overflow-y-auto">
               <TimelinePanel
                 project={p}
@@ -355,15 +378,32 @@ export function ProjectView({ id }: { id: string }) {
           </Card>
         </div>
 
+        <ResizeHandle orientation="vertical" label="Kéo để đổi độ rộng cột bên phải" className="hidden lg:block"
+          onReset={() => setRightFrac(DEFAULT_RIGHT)}
+          onMove={(x) => {
+            const r = gridRef.current?.getBoundingClientRect();
+            if (!r) return;
+            setRightFrac(clampFrac((r.right - x - 4) / r.width, MIN_RIGHT_PX / r.width, MAX_RIGHT));
+          }} />
         <Card className="h-[70vh] min-w-0 flex-row gap-0 overflow-hidden p-0 lg:h-auto lg:min-h-0">
           <nav aria-label="Các mục" className="flex w-11 shrink-0 flex-col items-center gap-1 overflow-y-auto border-r bg-muted/30 py-2">
             {RAIL.map((r) => (
               <IconButton key={r.id} label={r.label} active={tab === r.id} onClick={() => setTab(r.id)}>{r.icon}</IconButton>
             ))}
           </nav>
-          <div className="relative min-h-0 min-w-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {tab === "dub" && (
+              <div className="flex shrink-0 gap-1 border-b p-2">
+                {([["lines", `Bản dịch${p.segments.length ? ` (${p.segments.length})` : ""}`, <Languages key="l" />], ["config", "Giọng và cài đặt", <Mic key="m" />]] as const).map(([id, label, icon]) => (
+                  <Button key={id} type="button" size="sm" variant={dubView === id ? "secondary" : "ghost"} className="flex-1" onClick={() => setDubView(id)}>
+                    {icon} {label}
+                  </Button>
+                ))}
+              </div>
+            )}
+          <div className="relative min-h-0 flex-1">
             {/* every panel stays mounted (just hidden) so unsaved edits and drafts survive switching */}
-            <div className="h-full overflow-y-auto" hidden={tab !== "lines"}>
+            <div className="h-full overflow-y-auto" hidden={!(tab === "dub" && dubView === "lines")}>
               <SegmentList
                 project={p}
                 activeIdx={activeIdx}
@@ -375,10 +415,10 @@ export function ProjectView({ id }: { id: string }) {
               />
             </div>
             <div ref={setInspectorHost} className="h-full overflow-y-auto" hidden={tab !== "props"} />
-            <div className="h-full" hidden={!sectionTab}>
+            <div className="h-full" hidden={!sectionTab || (tab === "dub" && dubView !== "config")}>
               <SettingsPanel
                 projectId={id}
-                section={sectionTab ?? "script"}
+                section={sectionTab ?? "dub"}
                 handle={settingsRef}
                 sourceLangs={cfg?.langs ?? {}}
                 langLocked={p.segments.length > 0 || (busy && !locked)}
@@ -408,6 +448,7 @@ export function ProjectView({ id }: { id: string }) {
             <div className="h-full overflow-y-auto" hidden={tab !== "publish"}>
               <PublishPanel project={p} time={previewAt} apply={apply} />
             </div>
+          </div>
           </div>
         </Card>
       </div>

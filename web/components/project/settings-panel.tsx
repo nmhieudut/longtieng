@@ -1,6 +1,6 @@
 "use client";
 
-import { BookmarkCheck, Captions, CheckCircle2, Eye, EyeOff, Loader2, Mic, Music, ScanText } from "lucide-react";
+import { BookmarkCheck, Captions, CheckCircle2, Eye, EyeOff, Loader2, Mic, ScanText, Volume2 } from "lucide-react";
 import { toast } from "sonner";
 import { type Ref, useEffect, useImperativeHandle, useRef, useState } from "react";
 
@@ -42,7 +42,7 @@ type Props = {
 
 export type SettingsHandle = { flush: () => Promise<void> };
 
-export const SECTION_IDS = ["voice", "script", "audio", "music", "subs", "frame", "color", "logo", "mask"] as const;
+export const SECTION_IDS = ["dub", "music", "subs", "look"] as const;
 export type SectionId = (typeof SECTION_IDS)[number];
 
 export function SettingsPanel({
@@ -125,7 +125,7 @@ export function SettingsPanel({
     }
   }
 
-  const show = (id: SectionId) => ({ hidden: section !== id });
+  const show = (id: SectionId) => ({ hidden: section !== id, className: "border-b py-1 last:border-b-0" });
   return (
     <div className="flex h-full min-h-0 flex-col">
     <div className="flex items-center gap-1 border-b px-3 py-1.5">
@@ -150,7 +150,9 @@ export function SettingsPanel({
       </DialogContent>
     </Dialog>
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
-      <div {...show("voice")}><Section value="voice" icon={<Mic />} title="Giọng đọc"
+      <div {...show("dub")}><ScriptSection s={s} styles={reviewStyles} targetLangs={targetLangs} sourceLangs={sourceLangs} langLocked={langLocked} translatedTo={translatedTo} disabled={disabled} change={change} /></div>
+
+      <div {...show("dub")}><Section value="voice" icon={<Mic />} title="Giọng đọc"
         summary={`${voices[s.voice]?.label ?? s.voice} · ${s.rate.toFixed(2)}×`}>
         <Field label="Bấm ▶ để nghe thử">
           <VoicePicker voices={voicesFor(voices, s.target)} value={s.voice} disabled={disabled} onChange={(v) => change({ voice: v })} className="max-h-80" />
@@ -159,9 +161,8 @@ export function SettingsPanel({
           show={(v) => `${v.toFixed(2)}×`} onChange={(v) => change({ rate: v })} />
       </Section></div>
 
-      <div {...show("script")}><ScriptSection s={s} styles={reviewStyles} targetLangs={targetLangs} sourceLangs={sourceLangs} langLocked={langLocked} translatedTo={translatedTo} disabled={disabled} change={change} /></div>
 
-      <div {...show("audio")}><Section value="audio" icon={<Music />} title="Âm thanh gốc"
+      <div {...show("dub")}><Section value="audio" icon={<Volume2 />} title="Âm thanh gốc"
         summary={s.audio_mode === "mute" ? "Tắt" : `${s.audio_mode === "duck" ? "Giảm nhỏ" : "Giữ nhạc nền"} · ${Math.round(s.orig_volume * 100)}%`}>
         <ToggleGroup type="single" variant="outline" className="w-full" disabled={disabled}
           value={s.audio_mode} onValueChange={(v) => v && change({ audio_mode: v as Settings["audio_mode"] })}>
@@ -205,11 +206,11 @@ export function SettingsPanel({
         )}
       </Section></div>
 
-      <div {...show("frame")}><FrameSection s={s} disabled={disabled} change={change} preview={null} /></div>
-      <div {...show("color")}><ColorSection s={s} disabled={disabled} change={change} /></div>
-      <div {...show("logo")}><LogoSection s={s} disabled={disabled} change={change} /></div>
+      <div {...show("look")}><FrameSection s={s} disabled={disabled} change={change} preview={null} /></div>
+      <div {...show("look")}><ColorSection s={s} disabled={disabled} change={change} /></div>
+      <div {...show("look")}><LogoSection s={s} disabled={disabled} change={change} /></div>
 
-      <div {...show("mask")}><Section
+      <div {...show("subs")}><Section
         value="mask"
         icon={<EyeOff />}
         title="Che phụ đề gốc"
