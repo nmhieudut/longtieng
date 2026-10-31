@@ -65,7 +65,8 @@ export function ActionBar({ project: p, previewAt, onStart, onPreview, onRender,
   const langStale = hasLines && (p.translated_to ?? "vi") !== p.settings.target;
   const cancelling = s.message === "Đang huỷ…";
   // no lines: the video is simply being edited. Translating and dubbing is an option, not a step you must take.
-  const editOnly = !hasLines && (s.stage === "new" || s.stage === "done");
+  // (also after a failed or cancelled translation: the video is still there, and Xuất must never disappear)
+  const editOnly = !hasLines && !!p.media && (s.stage === "new" || s.stage === "done" || s.stage === "error");
 
   const dl = (key: "final" | "srt" | "json" | "txt") => {
     const f = p.outputs[key];
@@ -154,7 +155,7 @@ export function ActionBar({ project: p, previewAt, onStart, onPreview, onRender,
           </Tooltip>
         )}
         {editOnly ? (
-          <IconButton label="Dịch & lồng tiếng (tuỳ chọn): nhận dạng giọng nói, dịch và đọc lại bằng giọng đã chọn" variant="outline" onClick={onStart}><Languages /></IconButton>
+          <IconButton label="Dịch & lồng tiếng (tuỳ chọn): nhận dạng giọng nói, dịch và đọc lại bằng giọng đã chọn" variant="outline" onClick={s.stage === "error" ? onRetry : onStart}><Languages /></IconButton>
         ) : (
           <IconButton label="Viết lại lời thoại theo cài đặt hiện tại" variant={langStale ? "brand" : "outline"} onClick={() => setAskRewrite(true)}><Wand2 /></IconButton>
         )}

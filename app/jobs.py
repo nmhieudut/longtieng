@@ -46,6 +46,9 @@ def _submit(pid: str, fn, *args):
                 store.set_status(pid, "review", None, "Đã huỷ. Bản dịch vẫn giữ nguyên, bấm xuất lại khi sẵn sàng.")
             elif fn is _render:   # a plain edit export: nothing was lost, the project is as before
                 store.set_status(pid, "new", None, "Đã huỷ xuất video.")
+            elif p.get("media") and (store.pdir(pid) / (p["source"].get("file") or "-")).exists():
+                # translation cancelled: the video is fine, back to editing (Xuất stays available, translating can be started again)
+                store.set_status(pid, "new", None, "Đã huỷ dịch. Vẫn chỉnh sửa và xuất video được.")
             else:
                 store.set_status(pid, "error", None, "Đã huỷ.", error="Đã huỷ theo yêu cầu. Bấm Thử lại để chạy lại.")
         except Exception as e:
