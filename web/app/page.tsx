@@ -164,7 +164,7 @@ function ProjectList() {
               <Switch checked={autoRender} onCheckedChange={setAutoRender} aria-label="Tự xuất video khi xử lý xong" /> Tự xuất
             </label>
             <Button variant="brand" size="lg" className="h-9 rounded-xl px-4" disabled={starting} onClick={startAll}>
-              {starting ? <Loader2 className="animate-spin" /> : <Rocket />} Dịch & lồng tiếng tất cả ({fresh.length})
+              {starting ? <Loader2 className="animate-spin" /> : <Rocket />} {`Dịch & lồng tiếng tất cả (${fresh.length})`}
             </Button>
           </>
         )}

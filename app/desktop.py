@@ -253,7 +253,7 @@ def main() -> None:
     base = f"http://127.0.0.1:{port}"
     api = Api(base)
     window = webview.create_window("Lồng tiếng", base + "/", js_api=api, width=1400, height=900,
-                                   min_size=(960, 640), text_select=True)
+                                   min_size=(1024, 680), text_select=True)
     api._window = window
 
     from app import update

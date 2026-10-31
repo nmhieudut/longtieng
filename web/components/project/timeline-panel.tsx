@@ -444,7 +444,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
 
   return (
     <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-2 p-3">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="sticky top-0 z-20 -mx-3 -mt-3 flex flex-wrap items-center gap-2 bg-card px-3 pb-1 pt-3">
         <ToolBtn disabled={disabled} label="Cắt đôi tại đường chỉ" hint="S" onClick={cut}><Scissors /></ToolBtn>
         <ToolBtn disabled={disabled} label="Xoá đoạn đang chọn" hint="Delete" onClick={del} off={clips.length <= 1}><Trash2 /></ToolBtn>
         <ToolBtn disabled={disabled} label="Nhân đôi đoạn đang chọn" hint="D" onClick={dup}><Copy /></ToolBtn>
@@ -489,7 +489,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
 
       <p className="flex items-center gap-1 font-mono text-xs tabular-nums text-muted-foreground">
         <Tooltip>
-          <TooltipTrigger asChild><button type="button" aria-label="Cách dùng timeline" className="mr-1 hover:text-foreground"><HelpCircle className="size-3.5" /></button></TooltipTrigger>
+          <TooltipTrigger asChild><button type="button" aria-label="Cách dùng timeline" className="mr-1 grid size-6 place-items-center rounded hover:bg-accent hover:text-foreground"><HelpCircle className="size-4" /></button></TooltipTrigger>
           <TooltipContent className="max-w-sm">
             Bấm vào thanh hoặc kéo đường chỉ để chọn vị trí. Kéo hai mép một đoạn để cắt bớt, kéo cả đoạn sang cạnh để đổi thứ tự.
             Các câu lồng tiếng nằm trong phần bị cắt sẽ tự bỏ, câu còn lại tự dời theo. Video gốc không bị đổi; bấm Xuất để ra bản đã cắt ghép.
@@ -510,7 +510,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
               <div className="pointer-events-none absolute top-0 z-20 w-0.5 bg-primary" style={{ left: dropX, height: RULER_H + TRACK_H + LINES_H + 8 }} />
             )}
             {/* ruler */}
-            <div className="relative cursor-pointer select-none" style={{ height: RULER_H }} onPointerDown={scrub}>
+            <div className="relative cursor-pointer select-none overflow-hidden" style={{ height: RULER_H }} onPointerDown={scrub}>
               {ticks.map((t) => (
                 <span key={t} className="absolute top-0 h-full border-l border-border pl-1 text-[10px] leading-6 text-muted-foreground" style={{ left: t * pps }}>
                   {clock(t)}
@@ -625,7 +625,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
       </div>
 
       {inspectorHost && createPortal(
-        <div className="grid gap-3 p-3">
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 p-3">
       {selMusic && !selectedOv && <MusicInspector music={music} tracks={tracks} disabled={disabled} onChange={onMusic} />}
 
       {selectedOv && <OverlayInspector o={selectedOv} total={total} disabled={disabled} onChange={patchOverlay} onDelete={removeOverlay} />}
@@ -657,7 +657,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
               {[0.5, 1, 1.5, 2, 4].map((v) => (
                 <button key={v} type="button" disabled={disabled}
                   onClick={() => tw(setProps(clips, sel, { speed: v }), `speedchip${sel}${v}`)}
-                  className={cn("rounded-full border px-2 py-0.5 text-[11px] hover:bg-accent", spd(clips[sel]) === v && "border-primary bg-primary/10 text-primary")}>
+                  className={cn("rounded-full border px-2.5 py-1 text-xs hover:bg-accent", spd(clips[sel]) === v && "border-primary bg-primary/10 text-primary")}>
                   {v}×
                 </button>
               ))}

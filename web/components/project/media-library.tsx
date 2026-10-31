@@ -4,6 +4,10 @@ import { Film, Layers, Plus, RotateCw, Trash2, Upload } from "lucide-react";
 import { type RefObject, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { api, fileUrl, isActive, type Project } from "@/lib/api";
@@ -30,12 +34,12 @@ export function MediaLibrary({ project: p, tl, onApply, disabled }: {
     + (p.overlays ?? []).filter((o) => o.kind === "video" && (o.src ?? 0) === id).length;
 
   return (
-    <div className="grid content-start gap-3 p-3"
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-3 p-3"
       onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setOver(true); } }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => { e.preventDefault(); setOver(false); tl.current?.uploadFiles(Array.from(e.dataTransfer.files)); }}>
       <button type="button" disabled={disabled} onClick={() => input.current?.click()}
-        className={cn("flex flex-col items-center gap-1.5 rounded-xl border-[1.5px] border-dashed border-input bg-muted/40 px-3 py-5 text-center text-sm transition-colors disabled:opacity-60",
+        className={cn("flex min-w-0 flex-col items-center gap-1.5 break-words rounded-xl border-[1.5px] border-dashed border-input bg-muted/40 px-3 py-5 text-center text-sm transition-colors disabled:opacity-60",
           over ? "border-primary bg-primary/5" : "hover:border-primary/60 hover:bg-accent")}>
         <Upload className="size-5 text-primary" />
         <span className="font-medium">Thêm video (chọn nhiều file được)</span>
@@ -44,11 +48,11 @@ export function MediaLibrary({ project: p, tl, onApply, disabled }: {
       <input ref={input} type="file" hidden multiple accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mkv,.m4v"
         onChange={(e) => { const fs = Array.from(e.target.files ?? []); e.target.value = ""; if (fs.length) tl.current?.uploadFiles(fs); }} />
       <p className="text-xs text-muted-foreground">Kéo một video xuống timeline để chèn vào giữa hai đoạn, hoặc thả vào hàng chữ/hình dán để chồng lên video.</p>
-      <ul className="grid gap-2">
+      <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
         {items.map((it) => (
           <li key={it.id} draggable={!disabled && it.duration > 0}
             onDragStart={(e) => { e.dataTransfer.setData("text/lt-src", String(it.id)); e.dataTransfer.effectAllowed = "copy"; }}
-            className="flex cursor-grab items-center gap-2.5 rounded-xl border bg-card p-2 active:cursor-grabbing">
+            className="flex min-w-0 cursor-grab items-center gap-2 rounded-xl border bg-card p-2 active:cursor-grabbing">
             <span className="relative grid h-14 w-10 shrink-0 place-items-center overflow-hidden rounded-lg bg-secondary text-muted-foreground"
               style={it.film ? { backgroundImage: `url(${fileUrl(p.id, it.film.file)})`, backgroundSize: `${it.film.n * 100}% 100%`, backgroundPosition: "0 0" } : undefined}>
               {!it.film && <Film className="size-4" />}
@@ -66,17 +70,27 @@ export function MediaLibrary({ project: p, tl, onApply, disabled }: {
                 onClick={() => api.retrySource(p.id, it.id).then(onApply).catch((err) => toast.error((err as Error).message))}><RotateCw /></IconButton>
             )}
             {it.id !== 0 && (
-              <IconButton label={confirm === it.id ? "Bấm lần nữa để gỡ hẳn video này" : "Gỡ video khỏi dự án"} disabled={disabled || isActive(p)}
-                className={cn(confirm === it.id && "bg-destructive/15 text-destructive")}
-                onClick={() => {
-                  if (confirm !== it.id) { setConfirm(it.id); setTimeout(() => setConfirm((c) => (c === it.id ? null : c)), 3500); return; }
-                  setConfirm(null);
-                  api.deleteSource(p.id, it.id).then(onApply).catch((err) => toast.error((err as Error).message));
-                }}><Trash2 /></IconButton>
+              <IconButton label="Gỡ video khỏi dự án" disabled={disabled || isActive(p)} onClick={() => setConfirm(it.id)}><Trash2 /></IconButton>
             )}
           </li>
         ))}
       </ul>
+      <AlertDialog open={confirm !== null} onOpenChange={(o) => { if (!o) setConfirm(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Gỡ “{items.find((i) => i.id === confirm)?.name}” khỏi dự án?</AlertDialogTitle>
+            <AlertDialogDescription>Các đoạn và video chồng dùng video này sẽ bị bỏ khỏi timeline. File gốc của bạn không bị xoá.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Giữ lại</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => {
+              const id = confirm;
+              setConfirm(null);
+              if (id !== null) api.deleteSource(p.id, id).then(onApply).catch((err) => toast.error((err as Error).message));
+            }}>Gỡ</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {items.length === 1 && <Button variant="ghost" size="sm" className="justify-self-start" onClick={() => input.current?.click()}><Plus /> Thêm video thứ hai</Button>}
     </div>
   );

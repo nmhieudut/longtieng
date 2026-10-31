@@ -275,11 +275,10 @@ export function ProjectView({ id }: { id: string }) {
       <ActionBar
         project={p}
         previewAt={outAt}
-        onStart={() => run(async () => { await flushAll(); return api.start(id, false); })}
+        onOpenDub={() => { setTab("dub"); setDubView("config"); }}
         onSaveToFolder={async () => { await run(() => api.saveToFolder(id)); }}
         onRetry={() => run(() => api.retry(id))}
         onCancel={() => run(() => api.cancel(id))}
-        onRewrite={async () => { await flushAll(); await run(() => api.rewrite(id)); }}
         onPreview={() => { pendingShow.current = "preview"; run(async () => { await flushAll(); return api.render(id, outAt); }); }}
         onRender={() => { pendingShow.current = "final"; run(async () => { await flushAll(); return api.render(id, null); }); }}
         onJump={(i) => {
@@ -446,10 +445,10 @@ export function ProjectView({ id }: { id: string }) {
                 onPlay={onPlay}
               />
             </div>
-            <div className="h-full overflow-y-auto" hidden={tab !== "media"}>
+            <div className="h-full overflow-y-auto overflow-x-hidden" hidden={tab !== "media"}>
               <MediaLibrary project={p} tl={tlRef} onApply={apply} disabled={locked} />
             </div>
-            <div ref={setInspectorHost} className="h-full overflow-y-auto" hidden={tab !== "props"} />
+            <div ref={setInspectorHost} className="h-full overflow-y-auto overflow-x-hidden" hidden={tab !== "props"} />
             <div className="h-full" hidden={!sectionTab || (tab === "dub" && dubView !== "config") || (tab === "export" && expView !== "settings")}>
               <SettingsPanel
                 projectId={id}
@@ -458,6 +457,7 @@ export function ProjectView({ id }: { id: string }) {
                 sourceLangs={cfg?.langs ?? {}}
                 langLocked={p.segments.length > 0 || (busy && !locked)}
                 canHw={cfg?.features.hw_encoder ?? false}
+                onDub={() => run(async () => { await flushAll(); return p.status.stage === "error" && !p.segments.length ? api.retry(id) : p.segments.length ? api.rewrite(id) : api.start(id, false); })}
                 previewAt={previewAt}
                 subStyles={cfg?.sub_styles ?? {}}
                 reviewStyles={cfg?.review_styles ?? {}}

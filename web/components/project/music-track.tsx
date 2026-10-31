@@ -56,7 +56,7 @@ export function MusicInspector({ music, tracks, disabled, onChange }: {
             {tracks.map((t) => <SelectItem key={t.id} value={t.id}>{t.name} · {fmt(t.duration)}</SelectItem>)}
           </SelectContent>
         </Select>
-        <p className="text-[11px] text-muted-foreground">Thêm hoặc xoá bài trong thư viện ở Cài đặt → Nhạc nền.</p>
+        <p className="text-[11px] text-muted-foreground">Thêm hoặc xoá bài trong thư viện ở mục Âm thanh → Nhạc nền.</p>
       </div>
       {cur && (
         <>

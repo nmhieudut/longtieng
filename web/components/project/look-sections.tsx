@@ -1,9 +1,13 @@
 "use client";
 
-import { Crop, ImagePlus, Loader2, Palette, RotateCcw, Rocket, Sparkles, Stamp, Trash2 } from "lucide-react";
+import { Crop, ImagePlus, Languages, Loader2, Palette, RotateCcw, Rocket, Sparkles, Stamp, Trash2, Wand2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -187,11 +191,13 @@ export function LogoSection({ s, disabled, change }: { s: Settings; disabled: bo
 }
 
 /** Faithful translation or AI narration ("review") in a chosen style, plus "rewrite now". */
-export function ScriptSection({ s, styles, targetLangs, sourceLangs, langLocked, translatedTo, disabled, change }: {
+export function ScriptSection({ s, styles, targetLangs, sourceLangs, langLocked, translatedTo, disabled, change, hasLines, busy, onDub }: {
   s: Settings; styles: Record<string, string>; targetLangs: Record<string, { label: string; voice: string }>;
   sourceLangs: Record<string, string>; langLocked: boolean;   // the spoken language only matters until recognition has run
   translatedTo: string; disabled: boolean; change: Change;
+  hasLines: boolean; busy: boolean; onDub: () => Promise<void>;   // start translating, or write the lines again
 }) {
+  const [ask, setAsk] = useState(false);
   const sc = s.script;
   const stale = langLocked && translatedTo !== s.target;
   const label = (k: string) => targetLangs[k]?.label ?? k;
@@ -199,6 +205,31 @@ export function ScriptSection({ s, styles, targetLangs, sourceLangs, langLocked,
   return (
     <Section value="script" icon={<Sparkles />} title="Dịch & lồng tiếng (tuỳ chọn)"
       summary={`${sourceLangs[s.lang] ?? s.lang} → ${label(s.target)} · ${sc.mode === "review" ? `Review AI · ${styles[sc.style] ?? sc.style}` : "Dịch sát nghĩa"}`}>
+      <div className="grid gap-2 rounded-xl border bg-muted/40 p-3">
+        {hasLines ? (
+          <>
+            <Button type="button" variant={stale ? "brand" : "outline"} disabled={busy || disabled} onClick={() => setAsk(true)}><Wand2 /> Viết lại lời thoại theo cài đặt dưới đây</Button>
+            <p className="text-xs text-muted-foreground">Đổi ngôn ngữ, chế độ hoặc phong cách xong thì bấm nút này. Các câu bạn đã sửa tay sẽ bị thay.</p>
+          </>
+        ) : (
+          <>
+            <Button type="button" variant="brand" disabled={busy || disabled} onClick={() => { void onDub(); }}><Languages /> Dịch & lồng tiếng</Button>
+            <p className="text-xs text-muted-foreground">Nhận dạng giọng nói trong video, dịch rồi đọc lại bằng giọng bên dưới. Không bắt buộc: bỏ qua thì vẫn chỉnh sửa và xuất video bình thường.</p>
+          </>
+        )}
+      </div>
+      <AlertDialog open={ask} onOpenChange={setAsk}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Viết lại toàn bộ lời thoại?</AlertDialogTitle>
+            <AlertDialogDescription>Các câu bạn đã sửa tay sẽ bị thay bằng bản dịch mới theo ngôn ngữ và chế độ đã chọn.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Giữ nguyên</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { void onDub(); }}>Viết lại</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Ngôn ngữ trong video">
           <Select value={s.lang} disabled={disabled || langLocked} onValueChange={(v) => change({ lang: v })}>
@@ -221,14 +252,14 @@ export function ScriptSection({ s, styles, targetLangs, sourceLangs, langLocked,
       {langLocked && <p className="text-xs text-muted-foreground">Video đã được nhận dạng nên không đổi ngôn ngữ gốc được nữa. Muốn nhận dạng lại, nhập video này lần nữa.</p>}
       {stale && (
         <p className="rounded-lg border border-fast/40 bg-fast/10 px-3 py-2 text-xs text-fast-foreground">
-          Lời thoại hiện là {lower(translatedTo)}. Bấm nút đũa phép “Viết lại lời thoại” ở thanh trên để dịch sang{" "}
+          Lời thoại hiện là {lower(translatedTo)}. Bấm “Viết lại lời thoại” ở đầu mục này để dịch sang{" "}
           {lower(s.target)}; chưa viết lại thì chưa xuất video được. Giọng đọc đã tự đổi theo ngôn ngữ mới.
         </p>
       )}
       <ToggleGroup type="single" variant="outline" className="w-full" disabled={disabled}
         value={sc.mode} onValueChange={(v) => v && change({ script: { mode: v as "translate" | "review" } })}>
         <ToggleGroupItem value="translate" className="flex-1">Dịch sát nghĩa</ToggleGroupItem>
-        <ToggleGroupItem value="review" className="flex-1">Review / kể chuyện (AI)</ToggleGroupItem>
+        <ToggleGroupItem value="review" className="flex-1">Kể chuyện (AI)</ToggleGroupItem>
       </ToggleGroup>
       {sc.mode === "review" && (
         <Field label="Phong cách">
@@ -244,7 +275,7 @@ export function ScriptSection({ s, styles, targetLangs, sourceLangs, langLocked,
         {sc.mode === "review"
           ? "AI viết lại thành lời dẫn kể chuyện theo phong cách đã chọn, vừa khít thời lượng từng đoạn. Cần OpenAI API key."
           : "Dịch đúng lời nhân vật nói."}
-        {" "}Đổi chế độ hoặc ngôn ngữ xong thì bấm nút đũa phép ở thanh trên để viết lại (khi đã có lời thoại).
+        {" "}Đổi chế độ hoặc ngôn ngữ xong thì bấm nút ở đầu mục này.
       </p>
     </Section>
   );
@@ -281,7 +312,7 @@ export function ColorSection({ s, disabled, change }: { s: Settings; disabled: b
       {slider("vignette", "Tối viền", 0)}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
-          Video gốc ở bên trái đổi màu ngay (gần đúng). Bấm “Xem ảnh khung hình xuất ra” để xem đúng như khi xuất.
+          Video gốc ở bên trái đổi màu ngay (gần đúng). Bấm biểu tượng con mắt ở đầu bảng (Xem ảnh khung hình xuất ra) để xem đúng như khi xuất.
         </p>
         <Button type="button" variant="outline" size="sm" disabled={disabled || colorIsDefault(c)}
           onClick={() => change({ color: { ...COLOR_ZERO } })}>

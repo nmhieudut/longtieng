@@ -24,6 +24,7 @@ type Props = {
   handle?: Ref<SettingsHandle>;                // lets the action bar save pending edits before it acts
   sourceLangs: Record<string, string>;
   langLocked: boolean;
+  onDub: () => Promise<void>;                  // translate (or write the lines again) from the Lồng tiếng panel
   canHw: boolean;                              // this ffmpeg can encode with the Mac's hardware
   previewAt: number;                           // video time used for the still preview
   subStyles: Record<string, string>;
@@ -47,7 +48,7 @@ export const SECTION_IDS = ["dub", "audio", "subs", "look", "export"] as const;
 export type SectionId = (typeof SECTION_IDS)[number];
 
 export function SettingsPanel({
-  projectId, section, handle, sourceLangs, langLocked, canHw, previewAt, subStyles, reviewStyles, targetLangs, translatedTo,
+  projectId, section, handle, sourceLangs, langLocked, onDub, canHw, previewAt, subStyles, reviewStyles, targetLangs, translatedTo,
   settings, voices, canDemucs, disabled, busy, onDraft, onSave, maskDetect, onDetect,
 }: Props) {
   const [detecting, setDetecting] = useState(false);
@@ -151,7 +152,7 @@ export function SettingsPanel({
       </DialogContent>
     </Dialog>
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
-      <div {...show("dub")}><ScriptSection s={s} styles={reviewStyles} targetLangs={targetLangs} sourceLangs={sourceLangs} langLocked={langLocked} translatedTo={translatedTo} disabled={disabled} change={change} /></div>
+      <div {...show("dub")}><ScriptSection s={s} styles={reviewStyles} targetLangs={targetLangs} sourceLangs={sourceLangs} langLocked={langLocked} translatedTo={translatedTo} disabled={disabled} change={change} hasLines={langLocked} busy={busy} onDub={async () => { await flush(); await onDub(); }} /></div>
 
       <div {...show("dub")}><Section value="voice" icon={<Mic />} title="Giọng đọc"
         summary={`${voices[s.voice]?.label ?? s.voice} · ${s.rate.toFixed(2)}×`}>

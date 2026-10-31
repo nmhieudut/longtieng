@@ -1,15 +1,11 @@
 "use client";
 
 import {
-  AlertTriangle, ArrowLeft, CheckCircle2, Clapperboard, Download, FileJson, FileText, FolderOpen, Info, Languages, Loader2, MoreHorizontal,
-  Play, RotateCcw, Subtitles, Wand2, X,
+  AlertTriangle, ArrowLeft, CheckCircle2, Clapperboard, Download, FileJson, FileText, FolderOpen, Info, Loader2, MoreHorizontal,
+  Play, RotateCcw, Subtitles, X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
-  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -27,11 +23,10 @@ import { Steps } from "./steps";
 type Props = {
   project: Project & { edited_at?: number };
   previewAt: number;
-  onStart: () => void;
   onPreview: () => void;
   onRender: () => void;
   onRetry: () => void;
-  onRewrite: () => Promise<void>;
+  onOpenDub: () => void;                // the translate / rewrite button lives in the Lồng tiếng panel
   onCancel: () => Promise<void>;
   onJump: (segIndex: number) => void;   // show a problem line in the list
   onSaveToFolder: () => Promise<void>;
@@ -46,11 +41,10 @@ const ago = (t: number) => {
 };
 
 /** The one strip with everything you press: start, translate again, preview, export, download. Always on top. */
-export function ActionBar({ project: p, previewAt, onStart, onPreview, onRender, onRetry, onRewrite, onCancel, onJump, onSaveToFolder }: Props) {
+export function ActionBar({ project: p, previewAt, onOpenDub, onPreview, onRender, onRetry, onCancel, onJump, onSaveToFolder }: Props) {
   const [stopping, setStopping] = useState(false);
   const [folder, setFolder] = useState("");
   const [copying, setCopying] = useState(false);
-  const [askRewrite, setAskRewrite] = useState(false);
   useEffect(() => {
     const load = () => { api.appSettings().then((i) => setFolder(i.output_dir)).catch(() => {}); };
     load();
@@ -128,9 +122,9 @@ export function ActionBar({ project: p, previewAt, onStart, onPreview, onRender,
             {stale ? <AlertTriangle className="size-3.5" /> : <CheckCircle2 className="size-3.5" />}
             {stale ? "Có thay đổi chưa xuất lại" : `Video đã xuất · ${fmt(p.timeline?.clips?.length ? totalLen(p.timeline.clips) : p.media?.duration ?? 0)} · ${ago(final.at!)}`}
           </span>
-        ) : <span className="font-medium">{editOnly ? "Chỉnh sửa rồi xuất luôn · dịch và lồng tiếng là tuỳ chọn" : "Sẵn sàng lồng tiếng"}</span>}
+        ) : <span className="font-medium">{editOnly ? "Chỉnh sửa rồi xuất luôn · dịch và lồng tiếng là tuỳ chọn (mục Lồng tiếng)" : "Sẵn sàng lồng tiếng"}</span>}
         {!s.error && s.message.startsWith("Đã huỷ") && <span className="text-muted-foreground">{s.message}</span>}
-        {langStale && <span className="text-fast-foreground">Lời thoại chưa theo ngôn ngữ mới, bấm nút đũa phép để viết lại</span>}
+        {langStale && <button type="button" onClick={onOpenDub} className="rounded-md bg-fast/15 px-2 py-0.5 font-medium text-fast-foreground hover:bg-fast/25">Lời thoại chưa theo ngôn ngữ mới · viết lại</button>}
         {nOver > 0 && (
           <button type="button" onClick={() => onJump(over)} className="rounded-md bg-over/10 px-2 py-0.5 font-medium text-over hover:bg-over/20">
             {nOver} câu tràn
@@ -154,11 +148,6 @@ export function ActionBar({ project: p, previewAt, onStart, onPreview, onRender,
             </TooltipTrigger>
             <TooltipContent className="grid max-w-xs gap-1">{p.warnings.map((w) => <span key={w}>• {w}</span>)}</TooltipContent>
           </Tooltip>
-        )}
-        {editOnly ? (
-          <IconButton label="Dịch & lồng tiếng (tuỳ chọn): nhận dạng giọng nói, dịch và đọc lại bằng giọng đã chọn" variant="outline" onClick={s.stage === "error" ? onRetry : onStart}><Languages /></IconButton>
-        ) : (
-          <IconButton label="Viết lại lời thoại theo cài đặt hiện tại" variant={langStale ? "brand" : "outline"} onClick={() => setAskRewrite(true)}><Wand2 /></IconButton>
         )}
         <IconButton label={`Xem thử 30 giây từ ${fmt(previewAt)}`} variant="outline" onClick={onPreview}><Play /></IconButton>
         {final && <IconButton label="Tải video MP4" href={dl("final")} download variant={stale ? "outline" : "secondary"}><Download /></IconButton>}
@@ -219,20 +208,6 @@ export function ActionBar({ project: p, previewAt, onStart, onPreview, onRender,
           <FolderOpen className="size-3 shrink-0 text-primary" /><span className="min-w-0 truncate">Đã chép vào {saved.path}</span>
         </p>
       )}
-      <AlertDialog open={askRewrite} onOpenChange={setAskRewrite}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Viết lại toàn bộ lời thoại?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Các câu bạn đã sửa tay sẽ bị thay bằng bản dịch mới theo ngôn ngữ và chế độ trong mục Lồng tiếng.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Giữ nguyên</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { void onRewrite(); }}>Viết lại</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </header>
   );
 }

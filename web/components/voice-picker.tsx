@@ -101,7 +101,7 @@ export function VoicePicker({
                     <span className={cn("text-sm", selected && "font-semibold text-primary")}>{v.label}</span>
                     <Badge variant="outline" className="h-4 px-1.5 text-[10px] text-muted-foreground">{v.gender}</Badge>
                   </div>
-                  {v.note && <p className="truncate text-xs text-muted-foreground">{v.note}</p>}
+                  {v.note && <p className="line-clamp-2 text-xs text-muted-foreground">{v.note}</p>}
                 </div>
                 {selected && <Check className="size-4 shrink-0 text-primary" />}
               </div>

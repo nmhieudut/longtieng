@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -140,7 +141,7 @@ export function OverlayInspector({ o, total, disabled, onChange, onDelete }: {
         <>
           <div className="grid gap-1">
             <Label className="text-xs text-muted-foreground">Nội dung</Label>
-            <Input value={o.text ?? ""} maxLength={200} disabled={disabled} onChange={(e) => onChange({ text: e.target.value })} />
+            <Textarea rows={2} value={o.text ?? ""} maxLength={200} disabled={disabled} onChange={(e) => onChange({ text: e.target.value })} />
           </div>
           <div className="grid gap-2">
             <Label className="text-xs text-muted-foreground">Cỡ chữ</Label>
@@ -151,10 +152,10 @@ export function OverlayInspector({ o, total, disabled, onChange, onDelete }: {
             <div className="flex flex-wrap items-center gap-1.5">
               {SWATCHES.map((c) => (
                 <button key={c} type="button" aria-label={`Màu ${c}`} disabled={disabled} onClick={() => onChange({ color: c })}
-                  className={cn("size-6 rounded-full border", (o.color ?? "#ffffff") === c && "ring-2 ring-primary ring-offset-1")} style={{ background: c }} />
+                  className={cn("size-7 rounded-full border", (o.color ?? "#ffffff") === c && "ring-2 ring-primary ring-offset-1")} style={{ background: c }} />
               ))}
               <input type="color" aria-label="Chọn màu khác" disabled={disabled} value={o.color ?? "#ffffff"}
-                onChange={(e) => onChange({ color: e.target.value })} className="size-6 cursor-pointer rounded border bg-transparent p-0" />
+                onChange={(e) => onChange({ color: e.target.value })} className="size-7 cursor-pointer rounded border bg-transparent p-0" />
             </div>
           </div>
           <label className="flex items-center gap-2 text-xs"><Switch checked={!!o.box} disabled={disabled} onCheckedChange={(v) => onChange({ box: v })} /> Nền tối sau chữ</label>
