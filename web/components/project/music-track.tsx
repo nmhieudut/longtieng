@@ -45,9 +45,9 @@ export function MusicInspector({ music, tracks, disabled, onChange }: {
   const send = (patch: Partial<Music>) => { setLocal({}); onChange(patch); };
 
   return (
-    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 rounded-xl border p-3 sm:grid-cols-2" aria-label="Nhạc nền">
-      <p className="text-xs font-medium sm:col-span-2">Nhạc nền · chạy dưới cả video, hết bài thì lặp lại</p>
-      <div className="grid gap-2 sm:col-span-2">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 rounded-xl border p-3" aria-label="Nhạc nền">
+      <p className="text-xs font-medium">Nhạc nền · chạy dưới cả video, hết bài thì lặp lại</p>
+      <div className="grid gap-2">
         <Label className="text-xs text-muted-foreground">Bài nhạc</Label>
         <Select value={music.track ?? "none"} disabled={disabled} onValueChange={(v) => send({ track: v === "none" ? null : v, start: 0 })}>
           <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
@@ -70,7 +70,7 @@ export function MusicInspector({ music, tracks, disabled, onChange }: {
             <Slider min={0} max={Math.max(1, cur.duration - 1)} step={0.5} disabled={disabled} value={[start]} aria-label="Bắt đầu bài nhạc từ"
               onValueChange={([v]) => setLocal((l) => ({ ...l, start: v }))} onValueCommit={([v]) => send({ start: v })} />
           </div>
-          <label className="flex items-center gap-2 text-xs sm:col-span-2">
+          <label className="flex items-center gap-2 text-xs">
             <Switch checked={music.duck} disabled={disabled} onCheckedChange={(v) => send({ duck: v })} /> Nhạc nhỏ lại khi có giọng đọc
           </label>
         </>

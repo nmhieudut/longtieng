@@ -1,11 +1,11 @@
 "use client";
 
-import { BadgeCheck, Film, Maximize, Minimize, Pause, Play, SkipBack, Timer, Volume2, VolumeX } from "lucide-react";
+import { BadgeCheck, Copy, Film, ImagePlus, Trash2, Type, Maximize, Minimize, Pause, Play, SkipBack, Timer, Volume2, VolumeX } from "lucide-react";
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 import { IconButton } from "@/components/ui/icon-button";
 import { Slider } from "@/components/ui/slider";
-import { fmt, type Overlay, type Project, type Settings } from "@/lib/api";
+import { fileUrl, fmt, type Overlay, type Project, type Settings } from "@/lib/api";
 import { colorIsDefault, cssFilter, vignetteOverlay, warmthOverlay } from "@/lib/color";
 import { cn } from "@/lib/utils";
 
@@ -25,7 +25,18 @@ type Props = {
   edited: boolean;         // the timeline has cuts, so an exported video is in another time than the lines
   overlays: Overlay[];     // texts and stickers (output time), shown roughly over the original video
   outTime: number;         // playhead in output time
+  selectedOverlay: string | null;
+  editable: boolean;       // overlays can be dragged on the picture
+  onSelectOverlay: (id: string | null) => void;
+  onMoveOverlay: (id: string, x: number, y: number) => void;
+  onResizeOverlay: (id: string, size: number) => void;
+  onEditText: (id: string, text: string) => void;
+  onAddText: () => void;
+  onAddSticker: () => void;
+  onDuplicateOverlay: () => void;
+  onDeleteOverlay: () => void;
   playing: boolean;
+  gap: boolean;            // a blank clip is on the playhead: black, no video
   volume: number;
   muted: boolean;
   onVolume: (v: number) => void;
@@ -45,7 +56,7 @@ const VIEWS = [
 
 export function VideoPanel({
   project: p, videoRef, src, view, onView, time, activeIdx, mask, color, srcId, edited, overlays, outTime,
-  playing, volume, muted, onVolume, onMuted, onTogglePlay, scrub, onSeek, onTime, onLoaded,
+  selectedOverlay, editable, onSelectOverlay, onMoveOverlay, onResizeOverlay, onEditText, onAddText, onAddSticker, onDuplicateOverlay, onDeleteOverlay, playing, gap, volume, muted, onVolume, onMuted, onTogglePlay, scrub, onSeek, onTime, onLoaded,
 }: Props) {
   const box = useMaskBox(videoRef, src);
   const stage = useRef<HTMLDivElement>(null);
@@ -67,6 +78,36 @@ export function VideoPanel({
 
   const max = scrub ? scrub.max : view === "source" ? dur : vdur || dur;
   const value = scrub ? scrub.value : time;
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const startResize = (e: React.PointerEvent, o: Overlay) => {
+    if (!box) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const r = (e.currentTarget as HTMLElement).closest("[data-stage]")?.getBoundingClientRect();
+    if (!r) return;
+    const cx = r.left + box.x + o.x * box.w, cy = r.top + box.y + o.y * box.h;
+    const d0 = Math.max(8, Math.hypot(e.clientX - cx, e.clientY - cy));
+    const max = o.kind === "video" ? 1 : o.kind === "text" ? 0.4 : 0.8;
+    const move = (ev: PointerEvent) => onResizeOverlay(o.id, Math.min(max, Math.max(0.03, o.size * (Math.hypot(ev.clientX - cx, ev.clientY - cy) / d0))));
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  const startDrag = (e: React.PointerEvent, o: Overlay) => {
+    if (!box) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onSelectOverlay(o.id);
+    const x0 = e.clientX, y0 = e.clientY;
+    setDragging(o.id);
+    const move = (ev: PointerEvent) => {
+      onMoveOverlay(o.id, Math.min(1, Math.max(0, o.x + (ev.clientX - x0) / box.w)), Math.min(1, Math.max(0, o.y + (ev.clientY - y0) / box.h)));
+    };
+    const up = () => { setDragging(null); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
   const go = (t: number) => {
     if (scrub) { scrub.seek(t); return; }
     const v = videoRef.current;
@@ -79,7 +120,7 @@ export function VideoPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
-      <div ref={stage} className="group/stage relative min-h-0 flex-1 overflow-hidden rounded-xl bg-black">
+      <div ref={stage} data-stage className="group/stage relative min-h-0 flex-1 overflow-hidden rounded-xl bg-black">
         {src ? (
           <video
             ref={videoRef}
@@ -88,13 +129,16 @@ export function VideoPanel({
             preload="metadata"
             className="absolute inset-0 size-full cursor-pointer bg-black object-contain"
             style={live ? { filter: cssFilter(color) } : undefined}
-            onClick={onTogglePlay}
+            onClick={() => { onSelectOverlay(null); onTogglePlay(); }}
             onTimeUpdate={(e) => onTime(e.currentTarget.currentTime)}
             onLoadedMetadata={(e) => { setVd({ src, d: e.currentTarget.duration || 0 }); onLoaded(); }}
             onDurationChange={(e) => setVd({ src, d: e.currentTarget.duration || 0 })}
           />
         ) : (
           <div className="grid size-full place-items-center text-sm text-white/60">Đang tải video…</div>
+        )}
+        {gap && (
+          <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black text-sm text-white/50">Khoảng trống</div>
         )}
         {src && !playing && (
           <button type="button" onClick={onTogglePlay} aria-label="Phát"
@@ -111,18 +155,51 @@ export function VideoPanel({
         )}
         {box && overlays.filter((o) => outTime >= o.start && outTime <= o.end).map((o) => {
           const base = Math.min(box.w, box.h);
-          const style = { left: box.x + o.x * box.w, top: box.y + o.y * box.h, transform: "translate(-50%, -50%)" } as const;
-          return o.kind === "text" ? (
-            <div key={o.id} className="pointer-events-none absolute whitespace-pre-wrap text-center leading-tight"
-              style={{ ...style, maxWidth: box.w * 0.9, color: o.color ?? "#fff", fontSize: o.size * base, fontWeight: o.bold === false ? 400 : 700,
-                background: o.box ? "rgba(0,0,0,.55)" : undefined, padding: o.box ? "0.15em 0.4em" : undefined,
-                textShadow: o.box ? undefined : "0 0 3px #000, 0 0 3px #000, 0 0 3px #000" }}>
-              {o.text}
+          const sel = editable && selectedOverlay === o.id;
+          const editingThis = editing === o.id && o.kind === "text";
+          // text size is a fraction of the short side, pictures and videos a fraction of the width
+          const wrap: React.CSSProperties = {
+            left: box.x + o.x * box.w, top: box.y + o.y * box.h, transform: "translate(-50%, -50%)",
+            ...(o.kind === "text" ? { maxWidth: box.w * 0.9 } : { width: o.size * box.w }),
+          };
+          // drag to move, corner handles to resize, double-click a text to type in it
+          return (
+            <div key={o.id} style={wrap}
+              className={cn("absolute", editable ? (dragging === o.id ? "cursor-grabbing" : "cursor-grab") : "pointer-events-none", sel && "outline outline-2 outline-offset-2 outline-primary")}
+              onPointerDown={editable && !editingThis ? (e) => startDrag(e, o) : undefined}
+              onDoubleClick={editable && o.kind === "text" ? () => setEditing(o.id) : undefined}>
+              {o.kind === "text" ? (
+                editingThis ? (
+                  <textarea autoFocus onFocus={(e) => e.currentTarget.select()} value={o.text ?? ""} rows={Math.max(1, (o.text ?? "").split("\n").length)}
+                    onChange={(e) => onEditText(o.id, e.target.value)} onBlur={() => setEditing(null)}
+                    onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape" || (e.key === "Enter" && !e.shiftKey)) { e.preventDefault(); setEditing(null); } }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="w-full resize-none bg-black/30 text-center leading-tight outline-none"
+                    style={{ color: o.color ?? "#fff", fontSize: o.size * base, fontWeight: o.bold === false ? 400 : 700, minWidth: "6ch" }} />
+                ) : (
+                  <div className="select-none whitespace-pre-wrap text-center leading-tight"
+                    style={{ color: o.color ?? "#fff", fontSize: o.size * base, fontWeight: o.bold === false ? 400 : 700,
+                      background: o.box ? "rgba(0,0,0,.55)" : undefined, padding: o.box ? "0.15em 0.4em" : undefined,
+                      textShadow: o.box ? undefined : "0 0 3px #000, 0 0 3px #000, 0 0 3px #000" }}>
+                    {o.text}
+                  </div>
+                )
+              ) : o.kind === "video" ? (
+                (() => {
+                  const file = o.src ? p.extra_sources?.find((e) => e.id === o.src)?.file : p.source.file;
+                  return file ? <LayerVideo o={o} url={fileUrl(p.id, file)} playing={playing} outTime={outTime} mute={muted} master={volume}
+                    className="block w-full" style={{ opacity: o.opacity ?? 1 }} /> : null;
+                })()
+              ) : o.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={`/api/logos/${o.image}/file`} alt="" draggable={false} className="block w-full select-none" />
+              ) : null}
+              {sel && !editingThis && (["-left-1.5 -top-1.5 cursor-nwse-resize", "-right-1.5 -top-1.5 cursor-nesw-resize",
+                "-bottom-1.5 -left-1.5 cursor-nesw-resize", "-bottom-1.5 -right-1.5 cursor-nwse-resize"] as const).map((pos) => (
+                <span key={pos} onPointerDown={(e) => startResize(e, o)} className={cn("absolute size-3 rounded-sm border-2 border-primary bg-white", pos)} />
+              ))}
             </div>
-          ) : o.image ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img key={o.id} src={`/api/logos/${o.image}/file`} alt="" className="pointer-events-none absolute" style={{ ...style, width: o.size * box.w }} />
-          ) : null;
+          );
         })}
         {mask.enabled && view === "source" && box && (
           <div
@@ -166,6 +243,19 @@ export function VideoPanel({
         </IconButton>
         <Slider className="hidden w-20 shrink-0 sm:flex" aria-label="Âm lượng" min={0} max={1} step={0.05}
           value={[muted ? 0 : volume]} onValueChange={([v]) => { onVolume(v); if (muted && v > 0) onMuted(false); }} />
+        {editable && view === "source" && (
+          <>
+            <span className="mx-1 h-5 w-px bg-border" />
+            <IconButton label="Thêm chữ trên video" onClick={onAddText}><Type /></IconButton>
+            <IconButton label="Thêm hình dán" onClick={onAddSticker}><ImagePlus /></IconButton>
+            {selectedOverlay && (
+              <>
+                <IconButton label="Nhân đôi (Ctrl/⌘ D)" onClick={onDuplicateOverlay}><Copy /></IconButton>
+                <IconButton label="Xoá (Delete)" onClick={onDeleteOverlay}><Trash2 /></IconButton>
+              </>
+            )}
+          </>
+        )}
         <span className="mx-1 h-5 w-px bg-border" />
         {VIEWS.map(({ v, label, icon: Icon }) => (
           <IconButton key={v} label={label} active={view === v} disabled={v !== "source" && !o[v]} onClick={() => onView(v)}><Icon /></IconButton>
@@ -243,4 +333,25 @@ function Timeline({ project: p, srcId, dur, time, activeIdx, onSeek }: { project
       </div>
     </div>
   );
+}
+
+/** A video laid over the picture. It plays along with the main preview (kept in step by the playhead). */
+function LayerVideo({ o, url, playing, outTime, mute, master, style, className, onPointerDown }: {
+  o: Overlay; url: string; playing: boolean; outTime: number; mute: boolean; master: number;
+  style: React.CSSProperties; className?: string; onPointerDown?: (e: React.PointerEvent) => void;
+}) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const want = (o.from ?? 0) + Math.max(0, outTime - o.start);
+  useEffect(() => {
+    const v = ref.current;
+    if (v && Math.abs(v.currentTime - want) > 0.4) v.currentTime = want;   // seeked, or drifted
+  }, [want]);
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    v.muted = mute;
+    v.volume = Math.min(1, (o.volume ?? 1) * master);
+    if (playing) v.play().catch(() => {}); else v.pause();
+  }, [playing, mute, master, o.volume]);
+  return <video ref={ref} src={url} playsInline preload="auto" className={className} style={style} onPointerDown={onPointerDown} />;
 }

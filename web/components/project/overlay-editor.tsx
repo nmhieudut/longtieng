@@ -19,8 +19,9 @@ const HANDLE = 6;
 const SWATCHES = ["#ffffff", "#ffd400", "#ff4d4d", "#4dd2ff", "#7cfc00", "#000000"];
 
 /** Row of the timeline with the texts and stickers: drag a block to move it, drag its edges to change how long it shows. */
-export function OverlayTrack({ items, pps, total, selectedId, disabled, onSelect, onChange, onScrub }: {
+export function OverlayTrack({ items, pps, total, selectedId, disabled, srcDuration, onSelect, onChange, onScrub }: {
   items: Overlay[]; pps: number; total: number; selectedId: string | null; disabled: boolean;
+  srcDuration: (src: number) => number;   // length of a video, so a video layer cannot run past its end
   onSelect: (id: string) => void; onChange: (next: Overlay[]) => void; onScrub: (e: React.PointerEvent<HTMLElement>) => void;
 }) {
   const drag = (e: React.PointerEvent, o: Overlay, mode: "move" | "start" | "end") => {
@@ -39,11 +40,13 @@ export function OverlayTrack({ items, pps, total, selectedId, disabled, onSelect
         a = Math.min(Math.max(0, o.start + dt), Math.max(0, total - len));
         b = a + len;
       } else if (mode === "start") {
-        a = Math.min(Math.max(0, o.start + dt), o.end - MIN_LEN);
+        a = Math.min(Math.max(o.kind === "video" ? o.start - (o.from ?? 0) : 0, o.start + dt), o.end - MIN_LEN);
       } else {
-        b = Math.max(Math.min(total, o.end + dt), o.start + MIN_LEN);
+        const room = o.kind === "video" ? o.start + srcDuration(o.src ?? 0) - (o.from ?? 0) : total;   // the layer's own video ends there
+        b = Math.max(Math.min(room, o.end + dt), o.start + MIN_LEN);
       }
-      onChange(base.map((x) => (x.id === o.id ? { ...x, start: +a.toFixed(2), end: +b.toFixed(2) } : x)));
+      // trimming the front of a video layer moves where in the video it starts, so the picture stays in step
+      onChange(base.map((x) => (x.id === o.id ? { ...x, start: +a.toFixed(2), end: +b.toFixed(2), ...(x.kind === "video" ? { from: +Math.max(0, (o.from ?? 0) + (a - o.start)).toFixed(2) } : {}) } : x)));
     };
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move);
@@ -53,13 +56,13 @@ export function OverlayTrack({ items, pps, total, selectedId, disabled, onSelect
   return (
     <div className="relative mt-1" style={{ height: OVERLAY_H }} onPointerDown={onScrub}>
       {items.map((o) => (
-        <div key={o.id} role="button" tabIndex={0} title={o.kind === "text" ? o.text : "Hình dán"}
+        <div key={o.id} role="button" tabIndex={0} title={o.kind === "text" ? o.text : o.kind === "video" ? "Video chồng" : "Hình dán"}
           onPointerDown={(e) => drag(e, o, "move")}
           className={cn("absolute top-0 flex h-full items-center overflow-hidden rounded-sm border px-1.5 text-[10px] leading-none",
-            o.kind === "text" ? "border-primary/50 bg-primary/20" : "border-fast/60 bg-fast/25",
+            o.kind === "text" ? "border-primary/50 bg-primary/20" : o.kind === "video" ? "border-ok/60 bg-ok/20" : "border-fast/60 bg-fast/25",
             selectedId === o.id && "ring-2 ring-primary", disabled ? "cursor-default" : "cursor-grab active:cursor-grabbing")}
           style={{ left: o.start * pps, width: Math.max((o.end - o.start) * pps - 1, 6) }}>
-          <span className="pointer-events-none truncate">{o.kind === "text" ? o.text : "▣ Hình dán"}</span>
+          <span className="pointer-events-none truncate">{o.kind === "text" ? o.text : o.kind === "video" ? "▶ Video chồng" : "▣ Hình dán"}</span>
           {(["start", "end"] as const).map((side) => (
             <span key={side} onPointerDown={(e) => drag(e, o, side)}
               className={cn("absolute top-0 h-full cursor-col-resize hover:bg-primary/50", side === "start" ? "left-0" : "right-0")}
@@ -105,14 +108,14 @@ export function OverlayInspector({ o, total, disabled, onChange, onDelete }: {
   );
 
   return (
-    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 rounded-xl border p-3 sm:grid-cols-2" aria-label="Thuộc tính chữ hoặc hình dán">
-      <p className="flex items-center justify-between text-xs font-medium sm:col-span-2">
-        {o.kind === "text" ? "Chữ" : "Hình dán"} · {clock(o.start)}–{clock(o.end)}
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 rounded-xl border p-3" aria-label="Thuộc tính chữ hoặc hình dán">
+      <p className="flex items-center justify-between text-xs font-medium">
+        {o.kind === "text" ? "Chữ" : o.kind === "video" ? "Video chồng" : "Hình dán"} · {clock(o.start)}–{clock(o.end)}
         <Button type="button" variant="ghost" size="sm" disabled={disabled} onClick={onDelete}><Trash2 /> Xoá</Button>
       </p>
       {o.kind === "text" && (
         <>
-          <div className="grid gap-1 sm:col-span-2">
+          <div className="grid gap-1">
             <Label className="text-xs text-muted-foreground">Nội dung</Label>
             <Input value={o.text ?? ""} maxLength={200} disabled={disabled} onChange={(e) => onChange({ text: e.target.value })} />
           </div>
@@ -135,9 +138,25 @@ export function OverlayInspector({ o, total, disabled, onChange, onDelete }: {
           <label className="flex items-center gap-2 text-xs"><Switch checked={o.bold ?? true} disabled={disabled} onCheckedChange={(v) => onChange({ bold: v })} /> Chữ đậm</label>
         </>
       )}
+      {o.kind === "video" && (
+        <>
+          <div className="grid gap-2">
+            <Label className="text-xs text-muted-foreground">Độ rộng ({Math.round(o.size * 100)}%)</Label>
+            <Slider min={0.1} max={1} step={0.01} disabled={disabled} value={[o.size]} onValueChange={([v]) => onChange({ size: v })} aria-label="Độ rộng" />
+          </div>
+          <div className="grid gap-2">
+            <Label className="text-xs text-muted-foreground">Độ đậm ({Math.round((o.opacity ?? 1) * 100)}%)</Label>
+            <Slider min={0.1} max={1} step={0.05} disabled={disabled} value={[o.opacity ?? 1]} onValueChange={([v]) => onChange({ opacity: v })} aria-label="Độ đậm" />
+          </div>
+          <div className="grid gap-2">
+            <Label className="text-xs text-muted-foreground">Âm thanh của video này ({Math.round((o.volume ?? 1) * 100)}%)</Label>
+            <Slider min={0} max={1} step={0.05} disabled={disabled} value={[o.volume ?? 1]} onValueChange={([v]) => onChange({ volume: v })} aria-label="Âm thanh video chồng" />
+          </div>
+        </>
+      )}
       {o.kind === "image" && (
         <>
-          <div className="grid gap-2 sm:col-span-2">
+          <div className="grid gap-2">
             <Label className="text-xs text-muted-foreground">Hình</Label>
             <div className="flex flex-wrap items-center gap-2">
               {logos.map((l) => (
@@ -177,7 +196,7 @@ export function OverlayInspector({ o, total, disabled, onChange, onDelete }: {
       </div>
       {num("Hiện từ giây", o.start, "start")}
       {num("Đến giây", o.end, "end")}
-      <p className="text-[11px] text-muted-foreground sm:col-span-2">
+      <p className="text-[11px] text-muted-foreground">
         Thời gian tính theo video sau khi cắt ghép, nên không bị lệch khi bạn sửa đoạn. Xem thử ở video bên trái chỉ gần đúng; bản xuất mới chính xác.
       </p>
     </div>

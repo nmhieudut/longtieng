@@ -283,8 +283,15 @@ def _pipeline(clip: Path) -> str:
             r.raise_for_status()
             if r.json()["segments"] or r.json()["status"]["stage"] != "new":
                 raise RuntimeError("thêm video vào dự án chưa dịch mà lại đi nhận dạng")
-            clips2 = [{"start": 0, "end": D2 * 0.5}, {"src": 1, "start": 0, "end": 2.0}]
+            clips2 = [{"start": 0, "end": D2 * 0.5}, {"src": -1, "start": 0, "end": 1.5}, {"src": 1, "start": 0, "end": 2.0}]
             c.put(f"/api/projects/{eid}/timeline", json={"clips": clips2}).raise_for_status()
+            # two videos laid over the picture: one with sound (the main video), one without
+            r = c.put(f"/api/projects/{eid}/overlays", json={"overlays": [
+                {"kind": "video", "src": 0, "from": 0, "start": 0.5, "end": 3.0, "x": 0.7, "y": 0.2, "size": 0.4, "opacity": 0.8},
+                {"kind": "video", "src": 1, "from": 0, "start": 2.0, "end": 4.0, "x": 0.3, "y": 0.8, "size": 0.3}]})
+            r.raise_for_status()
+            if len([o for o in r.json()["overlays"] if o["kind"] == "video"]) != 2:
+                raise RuntimeError("video chồng không được lưu")
             c.post(f"/api/projects/{eid}/render", json={"preview_start": None}).raise_for_status()
             p2 = _wait(c, eid, {"done"}, 600)
             out2 = store.pdir(eid) / "out" / "final.mp4"
@@ -293,7 +300,7 @@ def _pipeline(clip: Path) -> str:
             info = _json.loads(pr.stdout)
             got3 = float(info["format"]["duration"])
             kinds = {s_["codec_type"] for s_ in info["streams"]}
-            if abs(got3 - (D2 * 0.5 + 2.0)) > 0.8 or kinds != {"video", "audio"} or p2["segments"] or p2["outputs"].get("srt"):
+            if abs(got3 - (D2 * 0.5 + 3.5)) > 0.8 or kinds != {"video", "audio"} or p2["segments"] or p2["outputs"].get("srt"):
                 raise RuntimeError(f"chỉ chỉnh sửa: dài {got3:.1f}s, luồng {sorted(kinds)}")
             from app import render as _render_mod
             if _render_mod.mean_volume_db(out2) < -50:

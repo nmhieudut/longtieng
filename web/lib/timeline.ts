@@ -14,12 +14,16 @@ export type Clip = {
 };
 
 export const MIN_CLIP = 0.2;
+/** `src` of a blank clip (black picture, silence). It is only a length: start 0, end = seconds. */
+export const GAP = -1;
+export const MAX_GAP = 60;
 export const MIN_SPEED = 0.25;
 export const MAX_SPEED = 4;
 export const uid = () => Math.random().toString(36).slice(2, 8);
 
 export const spd = (c: Clip) => c.speed || 1;
 export const srcOf = (c: Clip) => c.src ?? 0;
+export const isGap = (c: Clip) => srcOf(c) === GAP;
 /** Seconds the clip lasts in the export. */
 export const len = (c: Clip) => (c.end - c.start) / spd(c);
 /** Seconds clip i overlaps the clip before it. Never more than half of either clip (same rule as app/timeline.py). */

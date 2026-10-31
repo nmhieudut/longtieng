@@ -27,6 +27,8 @@ EDGE = 0.05      # "covers the whole video" tolerance
 MIN_SPEED, MAX_SPEED = 0.25, 4.0
 MAX_VOLUME = 2.0
 MAX_FADE = 2.0
+GAP = -1         # `src` of a blank clip: black picture, silence ("khoảng trống" between two clips)
+MAX_GAP = 60.0
 PROP_DEFAULTS = {"src": 0, "speed": 1.0, "volume": 1.0, "fade_in": 0.0, "fade_out": 0.0, "transition": 0.0}
 
 
@@ -37,6 +39,10 @@ def speed(c: dict) -> float:
 def clip_len(c: dict) -> float:
     """Seconds the clip lasts in the export (a 2x clip is half as long as the part of the source it covers)."""
     return (c["end"] - c["start"]) / speed(c)
+
+
+def is_gap(c: dict) -> bool:
+    return c.get("src", 0) == GAP
 
 
 def plain(c: dict) -> bool:
@@ -75,9 +81,12 @@ def validate(raw, duration: float, durations: dict[int, float] | None = None, ma
             tr = round(min(MAX_FADE, max(0.0, float(c.get("transition", 0.0)))), 2)
         except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
             raise ValueError("Có đoạn không hợp lệ.") from None
-        if src not in durations:
+        if src == GAP:
+            a, b, spd = 0.0, round(min(MAX_GAP, max(0.0, b - a)), 2), 1.0   # a blank clip is only a length
+        elif src not in durations:
             raise ValueError("Đoạn thuộc về một video không còn trong dự án.")
-        a, b = max(0.0, a), min(durations[src], b)
+        else:
+            a, b = max(0.0, a), min(durations[src], b)
         if b - a < MIN_CLIP:
             raise ValueError(f"Mỗi đoạn phải dài ít nhất {MIN_CLIP:g} giây.")
         cid = str(c.get("id") or "")[:12]
@@ -210,7 +219,7 @@ def _fps(path: Path) -> float:
 
 def _key(proj_dir: Path, p: dict, clips: list[dict]) -> str:
     files = {}
-    for src in sorted({c.get("src", 0) for c in clips}):
+    for src in sorted({c.get("src", 0) for c in clips if not is_gap(c)}):
         f = source_path(proj_dir, p, src)
         st = f.stat()
         files[src] = [f.name, st.st_size, int(st.st_mtime)]
@@ -234,14 +243,17 @@ def build_edit(proj_dir: Path, p: dict, clips: list[dict], on_progress=None) -> 
         stale.unlink(missing_ok=True)
     cmd = [FFMPEG, "-y", "-v", "error", "-progress", "pipe:1", "-nostats"]
     # one input per clip: with a single input ffmpeg must keep decoded frames of the clips concat is not reading yet
+    W, H = int(p["media"]["width"]) // 2 * 2, int(p["media"]["height"]) // 2 * 2
     for c in clips:
-        cmd += ["-ss", f"{c['start']:.3f}", "-t", f"{c['end'] - c['start']:.3f}", "-i",
-                str(source_path(proj_dir, p, c.get("src", 0)))]
+        if is_gap(c):
+            cmd += ["-f", "lavfi", "-t", f"{c['end']:.3f}", "-i", f"color=c=black:s={W}x{H}:r=30"]
+        else:
+            cmd += ["-ss", f"{c['start']:.3f}", "-t", f"{c['end'] - c['start']:.3f}", "-i",
+                    str(source_path(proj_dir, p, c.get("src", 0)))]
     n = len(clips)
     # another video can have another size, frame rate, no sound: bring every clip to the main video's format
     crossfades = any(trans(clips, i) > 0 for i in range(n))
     mixed = any(c.get("src", 0) != 0 for c in clips) or crossfades  # xfade needs identical size, fps and sound format
-    W, H = int(p["media"]["width"]) // 2 * 2, int(p["media"]["height"]) // 2 * 2
     fps = _fps(proj_dir / p["source"]["file"]) if mixed else 30.0
     extras = {e["id"]: e for e in extra_sources(p)}
     chains, ins = [], n  # `ins` = next free input index (silence for videos without sound goes after the clips)
@@ -257,7 +269,7 @@ def build_edit(proj_dir: Path, p: dict, clips: list[dict], on_progress=None) -> 
         if c.get("fade_out"):
             vf.append(f"fade=t=out:st={max(0.0, L - c['fade_out']):.3f}:d={c['fade_out']:.2f}")
         vf.append("settb=AVTB")  # xfade refuses inputs whose time bases differ (concat outputs AVTB, fps outputs 1/fps)
-        silent = c.get("src", 0) != 0 and not extras.get(c["src"], {}).get("has_audio", True)
+        silent = is_gap(c) or c.get("src", 0) != 0 and not extras.get(c["src"], {}).get("has_audio", True)
         if silent:
             cmd += ["-f", "lavfi", "-t", f"{L:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
             a_in, ins = f"[{ins}:a]", ins + 1
@@ -338,4 +350,5 @@ def virtual(proj_dir: Path, p: dict, on_progress=None) -> dict:
         "segments": map_segments(clips, p["segments"]),
         "media": p["media"] | {"duration": out_duration(clips)},
         "source": p["source"] | {"file": "edit.mp4"},
+        "_main": p["source"]["file"],   # the original file, for video layers that come from the main video
     }

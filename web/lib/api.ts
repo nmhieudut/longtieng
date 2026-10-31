@@ -43,7 +43,7 @@ export type Logo = { id: string; name: string; file: string };
 /** Text or picture laid over the exported video; times are seconds of the EDITED video. */
 export type Overlay = {
   id: string;
-  kind: "text" | "image";
+  kind: "text" | "image" | "video";
   start: number;
   end: number;
   x: number;          // centre, 0..1 of the width
@@ -54,6 +54,10 @@ export type Overlay = {
   box?: boolean;      // dark box behind the letters
   bold?: boolean;
   image?: string;     // id in the logo library
+  src?: number;       // video: which video of the project (0 = the main one)
+  from?: number;      // video: second of that video where it starts playing
+  opacity?: number;   // video: 0.1 .. 1
+  volume?: number;    // video: its own sound, 0 .. 1
 };
 
 export type Stage =
@@ -323,10 +327,11 @@ export const fullCaption = (c: Caption) =>
   [c.title, c.description, c.hashtags.join(" ")].filter((x) => x.trim()).join("\n\n");
 
 /** Add another video to a project's timeline (XHR for the upload progress). */
-export function addSource(id: string, file: File, onProgress: (x: number) => void): Promise<Project> {
+export function addSource(id: string, file: File, onProgress: (x: number) => void, layer?: { at: number }): Promise<Project> {
   return new Promise((resolve, reject) => {
     const fd = new FormData();
     fd.append("file", file);
+    if (layer) { fd.append("as_layer", "true"); fd.append("at", String(layer.at)); }
     const x = new XMLHttpRequest();
     x.open("POST", `/api/projects/${id}/sources`);
     x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);

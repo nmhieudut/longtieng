@@ -2,7 +2,7 @@
 
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
-import { type Clip, layout, len, srcOf, trans } from "@/lib/timeline";
+import { type Clip, isGap, layout, len, srcOf, trans } from "@/lib/timeline";
 
 /** Clip for a time in the loaded video: keep the current one while the time is inside it, else the first of this
  *  video that holds it, else (the time is in a cut part) the next clip of this video that starts after it.
@@ -34,12 +34,20 @@ export function useClipPlayback(opts: {
 }) {
   const { videoRef, clips, loaded, active, playing, time, volume, muted, onJump, onSwitch } = opts;
   const [idx, setIdx] = useState(0);
-  const live = useRef({ clips, idx, loaded });
+  // a blank clip has no video to play: its own clock runs. gapT = seconds into clip `idx` (null: a video is on screen)
+  const [gap, setGap] = useState<{ t: number; at: number } | null>(null);   // `at`: the video time it was entered at
+  const [gapRun, setGapRun] = useState(false);
+  const gapBase = useRef(0);   // performance.now() minus the seconds already played
+  const live = useRef({ clips, idx, loaded, time });
   const wasActive = useRef(false);
-  useEffect(() => { live.current = { clips, idx, loaded }; });
+  useEffect(() => { live.current = { clips, idx, loaded, time }; });
+  // the video is moved by someone else (a click on the line strip, a line in the list): that ends the blank clip
+  const gapT = gap && gap.at === time ? gap.t : null;
+  const gapOn = gapT !== null;
+  const setGapT = useCallback((t: number | null) => setGap(t === null ? null : { t, at: live.current.time }), []);
 
   // follow the video while it is not playing (seek, click, undo ...): derived during render, no effect needed
-  const wanted = active ? pick(clips, time, idx, loaded) : idx;
+  const wanted = active && gapT === null ? pick(clips, time, idx, loaded) : idx;
   if (wanted !== idx) setIdx(wanted);
 
   // playing: step through the clips (timeupdate is too coarse, it would run into cut material)
@@ -64,9 +72,15 @@ export function useClipPlayback(opts: {
             v.pause();
             v.currentTime = c.end;
             onJump(c.end);
+          } else if (isGap(next)) {                         // a blank part follows: its clock takes over
+            v.pause();
+            setIdx(i + 1);
+            gapBase.current = performance.now();
+            setGapT(0);
+            setGapRun(true);
           } else {
             setIdx(i + 1);
-            live.current = { clips: cs, idx: i + 1, loaded: ld };
+            live.current = { ...live.current, clips: cs, idx: i + 1, loaded: ld };
             if (srcOf(next) !== ld) {                       // the next part is in another video file
               v.pause();
               onSwitch(srcOf(next), next.start, true);
@@ -81,7 +95,55 @@ export function useClipPlayback(opts: {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [active, playing, videoRef, onJump, onSwitch]);
+  }, [active, playing, videoRef, onJump, onSwitch, setGapT]);
+
+  // running through a blank clip, then on to what follows it
+  useEffect(() => {
+    if (!active || !gapRun || !gapOn) return;
+    let raf = 0;
+    const tick = () => {
+      const { clips: cs, idx: cur, loaded: ld } = live.current;
+      const c = cs[cur];
+      if (!c) { setGapRun(false); return; }
+      const t = (performance.now() - gapBase.current) / 1000;
+      if (t < len(c)) { setGapT(t); raf = requestAnimationFrame(tick); return; }
+      const next = cs[cur + 1];
+      if (!next) { setGapT(len(c)); setGapRun(false); return; }
+      setIdx(cur + 1);
+      live.current = { ...live.current, clips: cs, idx: cur + 1, loaded: ld };
+      if (isGap(next)) { gapBase.current = performance.now(); setGapT(0); raf = requestAnimationFrame(tick); return; }
+      setGapT(null);
+      setGapRun(false);
+      if (srcOf(next) !== ld) { onSwitch(srcOf(next), next.start, true); return; }
+      const v = videoRef.current;
+      if (v) { v.currentTime = next.start; onJump(next.start); v.play().catch(() => {}); }
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [active, gapRun, gapOn, videoRef, onJump, onSwitch, setGapT]);
+
+  /** Play / pause, whether a video or a blank clip is on screen. */
+  const toggle = useCallback(() => {
+    const { clips: cs, idx: cur } = live.current;
+    if (cs[cur] && isGap(cs[cur])) {
+      if (gapRun && gapOn) { setGapRun(false); return; }
+      const at = gapT === null || gapT >= len(cs[cur]) - 0.01 ? 0 : gapT;
+      gapBase.current = performance.now() - at * 1000;
+      setGapT(at);
+      setGapRun(true);
+      return;
+    }
+    const v = videoRef.current;
+    if (v) { if (v.paused) v.play().catch(() => {}); else v.pause(); }
+  }, [gapRun, gapOn, gapT, videoRef, setGapT]);
+
+  /** Put the playhead on clip i (a click on it). */
+  const selectClip = useCallback((i: number) => {
+    setIdx(i);
+    setGapRun(false);
+    const c = live.current.clips[i];
+    if (c && isGap(c)) { videoRef.current?.pause(); setGapT(0); } else setGapT(null);
+  }, [videoRef, setGapT]);
 
   // the video element plays the clip at its speed and volume; anything else (exports, no edit) plays normally
   const cur = clips[Math.min(idx, Math.max(0, clips.length - 1))];
@@ -106,7 +168,9 @@ export function useClipPlayback(opts: {
   const i = Math.min(idx, Math.max(0, clips.length - 1));
   const row = layout(clips)[i];
   const inLoaded = !!row && srcOf(row.clip) === loaded;
-  const T = row
+  const T = row && gapT !== null && isGap(row.clip)
+    ? row.at + Math.min(gapT, len(row.clip))
+    : row
     ? row.at + (inLoaded ? Math.min(Math.max(time - row.clip.start, 0), row.clip.end - row.clip.start) / (row.clip.speed || 1) : 0)
     : 0;
 
@@ -117,10 +181,18 @@ export function useClipPlayback(opts: {
     let k = rs.findIndex((r) => out < r.at + len(r.clip));
     if (k < 0) k = rs.length - 1;
     setIdx(k);
+    setGapRun(false);
+    if (isGap(rs[k].clip)) {   // into a blank part: no video to seek, just the position inside it
+      videoRef.current?.pause();
+      setGapT(Math.min(Math.max(out - rs[k].at, 0), len(rs[k].clip)));
+      return;
+    }
+    setGapT(null);
     const src = rs[k].clip.start + Math.min(Math.max(out - rs[k].at, 0), len(rs[k].clip)) * (rs[k].clip.speed || 1);
     if (srcOf(rs[k].clip) !== ld) onSwitch(srcOf(rs[k].clip), src, false);
     else onJump(src);
-  }, [onJump, onSwitch]);
+  }, [onJump, onSwitch, videoRef, setGapT]);
 
-  return { idx: i, T, seekOut, setIdx };
+  const inGap = gapT !== null && !!row && isGap(row.clip);
+  return { idx: i, T, seekOut, setIdx, selectClip, toggle, inGap, gapRunning: gapRun && inGap, leaveGap: () => { setGapT(null); setGapRun(false); } };
 }

@@ -357,7 +357,8 @@ def music_path(proj: dict) -> Path | None:
 
 def build_filters(proj_dir: Path, proj: dict, bg_label: str | None, start: float, length: float | None,
                   music_label: str | None = None, logo_label: str | None = None,
-                  overlay_imgs: list[tuple[str, dict]] | None = None) -> str:
+                  overlay_imgs: list[tuple[str, dict]] | None = None,
+                  overlay_vids: list[tuple[str, dict, float, float, bool]] | None = None) -> str:
     st, media = proj["settings"], proj["media"]
     ass = None
     over = proj.get("overlays") or []
@@ -370,6 +371,21 @@ def build_filters(proj_dir: Path, proj: dict, bg_label: str | None, start: float
         g = frame.geom(media, st["frame"])
         parts, v = ov.image_filters(overlay_imgs, v, g["W"], g["H"], start, length)
         chain += parts
+    vid_audio: list[str] = []
+    if overlay_vids:   # videos laid over the picture: (input index, overlay, first second, last second, has sound)
+        g = frame.geom(media, st["frame"])
+        for k, (idx, o, a0, a1, has_audio) in enumerate(overlay_vids):
+            w = max(16, int(g["W"] * o["size"]) // 2 * 2)
+            alpha = f",colorchannelmixer=aa={o.get('opacity', 1.0):.3f}" if o.get("opacity", 1.0) < 1 else ""
+            chain.append(f"[{idx}:v]scale={w}:-2,format=rgba{alpha},setpts=PTS-STARTPTS+{a0:.3f}/TB[lv{k}]")
+            chain.append(f"{v}[lv{k}]overlay=x=main_w*{o['x']:.4f}-overlay_w/2:y=main_h*{o['y']:.4f}-overlay_h/2"
+                         f":eof_action=pass:enable='between(t,{a0:.3f},{a1:.3f})':format=auto[lvo{k}]")
+            v = f"[lvo{k}]"
+            if has_audio and o.get("volume", 1.0) > 0:
+                ms = int(a0 * 1000)
+                chain.append(f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,volume={o['volume']:.2f},"
+                             f"adelay={ms}:all=1[lva{k}]")
+                vid_audio.append(f"[lva{k}]")
     if v == "[0:v]":
         chain.append("[0:v]null[vout]")
     else:
@@ -382,6 +398,7 @@ def build_filters(proj_dir: Path, proj: dict, bg_label: str | None, start: float
         chain.append("[1:a]asplit=2[dub][sc]")
     else:
         chain.append("[1:a]anull[dub]")
+    mix += vid_audio
     if bg_label and st["orig_volume"] > 0:
         chain.append(f"[{bg_label}]volume={st['orig_volume']:.3f}[bga]")
         mix.append("[bga]")
@@ -452,7 +469,21 @@ def render(proj_dir: Path, proj: dict, out: Path, bg: Path | None,
         if item and logos.path(item).exists():
             overlay_imgs.append((f"{sum(1 for x in cmd if x == '-i')}:v", o))
             cmd += ["-i", str(logos.path(item))]
-    filters = build_filters(proj_dir, proj, bg_label, start, length, music_label, logo_label, overlay_imgs)
+    overlay_vids = []
+    main_file = proj.get("_main") or proj["source"]["file"]
+    extras = {e["id"]: e for e in proj.get("extra_sources") or []}
+    for o in proj.get("overlays") or []:
+        span = ov.in_window(o, start, length) if o["kind"] == "video" else None
+        if span is None:
+            continue
+        path = proj_dir / main_file if o["src"] == 0 else proj_dir / extras[o["src"]]["file"] if o["src"] in extras else None
+        if path is None or not path.exists():
+            continue
+        skip = max(0.0, start - o["start"])   # a preview that starts in the middle of the layer
+        has_audio = bool(media.get("has_audio", True)) if o["src"] == 0 else bool(extras[o["src"]].get("has_audio", True))
+        overlay_vids.append((f"{sum(1 for x in cmd if x == '-i')}", o, span[0], span[1], has_audio))
+        cmd += ["-ss", f"{o['from'] + skip:.3f}", "-t", f"{span[1] - span[0]:.3f}", "-i", str(path)]
+    filters = build_filters(proj_dir, proj, bg_label, start, length, music_label, logo_label, overlay_imgs, overlay_vids)
     cmd += ["-filter_complex", filters, "-map", "[vout]", "-map", "[aout]"]
     cmd += ["-t", f"{(length or media['duration']):.3f}"]
     cmd += ["-c:v", "libx264", "-preset", "ultrafast" if length else "veryfast", "-crf", "20",

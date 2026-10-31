@@ -1,4 +1,4 @@
-"""Text and picture stickers placed on the exported video at chosen moments.
+"""Text, picture stickers and video layers (picture in picture) placed on the exported video at chosen moments.
 
 Times are in OUTPUT time (seconds of the edited video), so they stay where they were put when clips are cut or
 reordered. Text is drawn through the subtitle renderer (a font with a colour, optional dark box); pictures come
@@ -12,32 +12,35 @@ import secrets
 from . import logos
 
 MAX_OVERLAYS = 40
+MAX_VIDEO_LAYERS = 6
 MIN_LEN = 0.2
 _COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
-def validate(raw) -> list[dict]:
+def validate(raw, durations: dict[int, float] | None = None) -> list[dict]:
     """Clean up what the browser sent. ValueError (message for the user) if it cannot be used."""
     if raw is None:
         return []
     if not isinstance(raw, list) or len(raw) > MAX_OVERLAYS:
-        raise ValueError(f"Tối đa {MAX_OVERLAYS} chữ và hình dán.")
+        raise ValueError(f"Tối đa {MAX_OVERLAYS} chữ, hình dán và video chồng.")
+    if sum(1 for o in raw if isinstance(o, dict) and o.get("kind") == "video") > MAX_VIDEO_LAYERS:
+        raise ValueError(f"Tối đa {MAX_VIDEO_LAYERS} video chồng.")
     out, seen = [], set()
     for o in raw:
         try:
             kind = o["kind"]
             a, b = round(float(o["start"]), 2), round(float(o["end"]), 2)
             x, y = float(o.get("x", 0.5)), float(o.get("y", 0.5))
-            size = float(o.get("size", 0.06 if kind == "text" else 0.25))
+            size = float(o.get("size", 0.06 if kind == "text" else 0.4 if kind == "video" else 0.25))
         except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
             raise ValueError("Có chữ hoặc hình dán không hợp lệ.") from None
-        if kind not in ("text", "image"):
+        if kind not in ("text", "image", "video"):
             raise ValueError("Loại không hợp lệ.")
         a = max(0.0, a)
         if b - a < MIN_LEN:
             raise ValueError(f"Mỗi chữ/hình dán phải hiện ít nhất {MIN_LEN:g} giây.")
         item = {"id": "", "kind": kind, "start": a, "end": b, "x": min(1.0, max(0.0, x)), "y": min(1.0, max(0.0, y)),
-                "size": round(min(0.8, max(0.02, size)), 3)}
+                "size": round(min(1.0 if kind == "video" else 0.8, max(0.02, size)), 3)}
         if kind == "text":
             text = str(o.get("text", "")).strip()[:200]
             if not text:
@@ -45,6 +48,21 @@ def validate(raw) -> list[dict]:
             color = str(o.get("color", "#ffffff"))
             item |= {"text": text, "color": color if _COLOR.match(color) else "#ffffff",
                      "box": bool(o.get("box", False)), "bold": bool(o.get("bold", True))}
+        elif kind == "video":
+            try:
+                src, frm = int(o["src"]), max(0.0, float(o.get("from", 0.0)))
+                opacity, vol = float(o.get("opacity", 1.0)), float(o.get("volume", 1.0))
+            except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+                raise ValueError("Có video chồng không hợp lệ.") from None
+            if durations is None or src not in durations:
+                raise ValueError("Video chồng thuộc về một video không còn trong dự án.")
+            if frm > durations[src] - MIN_LEN:
+                raise ValueError("Video chồng bắt đầu sau khi video đã hết.")
+            b = min(b, a + durations[src] - frm)   # it cannot play longer than there is video
+            if b - a < MIN_LEN:
+                raise ValueError(f"Mỗi video chồng phải hiện ít nhất {MIN_LEN:g} giây.")
+            item |= {"end": round(b, 2), "src": src, "from": round(frm, 2),
+                     "opacity": round(min(1.0, max(0.1, opacity)), 2), "volume": round(min(1.0, max(0.0, vol)), 2)}
         else:
             if not logos.get(str(o.get("image") or "")):
                 raise ValueError("Hình dán không còn trong thư viện.")

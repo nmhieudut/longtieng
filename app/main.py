@@ -684,7 +684,7 @@ def put_overlays(pid: str, body: dict = Body(...)):
     if jobs.busy(pid) and p["status"]["stage"] in RENDER_STAGES:
         raise HTTPException(409, "Đang xuất video, đợi xong (hoặc bấm Huỷ) rồi sửa.")
     try:
-        items = overlays.validate(body.get("overlays"))
+        items = overlays.validate(body.get("overlays"), timeline.source_durations(p))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -764,9 +764,10 @@ def _add_clip(p: dict, entry: dict) -> list[dict]:
 
 
 @app.post("/api/projects/{pid}/sources")
-def add_source(pid: str, file: UploadFile = File(...)):
+def add_source(pid: str, file: UploadFile = File(...), as_layer: bool = Form(False), at: float = Form(0.0)):
     """Add another video to the project: it goes at the end of the timeline and its speech is recognised and
-    translated like the main video's."""
+    translated like the main video's. as_layer: it is laid over the picture from second `at` instead (picture in
+    picture), with nothing to recognise."""
     p = _load(pid)
     _not_busy(pid)
     if not p.get("media"):
@@ -797,7 +798,8 @@ def add_source(pid: str, file: UploadFile = File(...)):
         entry = {"id": n, "file": dst.name, "name": Path(file.filename or "video").stem[:80], "duration": info["duration"],
                  "width": info["width"], "height": info["height"], "has_audio": info["has_audio"]}
         # (checked again below on the timeline as it is when the upload has finished: it stays editable meanwhile)
-        _add_clip(p, entry)
+        if not as_layer:
+            _add_clip(p, entry)
     except MediaError as e:
         dst.unlink(missing_ok=True)
         raise HTTPException(400, str(e))
@@ -810,15 +812,22 @@ def add_source(pid: str, file: UploadFile = File(...)):
 
     def fn(q):
         q["extra_sources"] = timeline.extra_sources(q) + [entry]
-        q["timeline"] = {"clips": _add_clip(q, entry)}   # from the CURRENT clips, so edits made during the upload stay
+        if as_layer:
+            a = max(0.0, float(at))
+            q["overlays"] = overlays.validate(
+                (q.get("overlays") or []) + [{"kind": "video", "src": n, "from": 0, "start": a, "end": a + entry["duration"],
+                                              "x": 0.75, "y": 0.25, "size": 0.4}],
+                timeline.source_durations(q))
+        else:
+            q["timeline"] = {"clips": _add_clip(q, entry)}   # from the CURRENT clips, so edits made during the upload stay
         q["edited_at"] = time.time()
     try:
         store.update(pid, fn)
     except ValueError as e:
         dst.unlink(missing_ok=True)
         raise HTTPException(400, str(e))
-    if p["status"]["stage"] == "new" and not p["segments"]:
-        return _view(store.load(pid))   # editing only so far: nothing to recognise or translate
+    if as_layer or p["status"]["stage"] == "new" and not p["segments"]:
+        return _view(store.load(pid))   # a layer, or editing only so far: nothing to recognise or translate
     store.set_status(pid, "extracting", None, "Đang chuẩn bị video mới…")  # so the page starts following the job
     try:
         jobs.submit_extra(pid, n)
@@ -865,6 +874,11 @@ def delete_source(pid: str, src: int):
             q.pop("timeline", None)
         if not q["extra_sources"] and not timeline.is_edited(q):
             q.pop("timeline", None)
+        left_ov = [o for o in (q.get("overlays") or []) if not (o["kind"] == "video" and o["src"] == src)]
+        if left_ov:
+            q["overlays"] = left_ov
+        else:
+            q.pop("overlays", None)
         q["edited_at"] = time.time()
     gone = [s["id"] for s in p["segments"] if s.get("src_id", 0) == src]
     out = store.update(pid, fn)

@@ -1,6 +1,6 @@
 "use client";
 
-import { AudioLines, Captions, EyeOff, Frame, ImageIcon, Languages, Mic, Music, Palette, Send, Sparkles, WifiOff } from "lucide-react";
+import { AudioLines, SlidersHorizontal, Captions, EyeOff, Frame, ImageIcon, Languages, Mic, Music, Palette, Send, Sparkles, WifiOff } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -15,7 +15,7 @@ import { SECTION_IDS, type SectionId, SettingsPanel, type SettingsHandle } from 
 import { ActionBar } from "./action-bar";
 import { useProject } from "./use-project";
 import { PublishPanel } from "./publish-panel";
-import { TimelinePanel } from "./timeline-panel";
+import { TimelinePanel, type TimelineHandle } from "./timeline-panel";
 import { useClipPlayback } from "./use-clip-playback";
 import { newEditLog } from "./edit-log";
 import { useOverlays } from "./use-overlays";
@@ -36,6 +36,9 @@ export function ProjectView({ id }: { id: string }) {
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const settingsRef = useRef<SettingsHandle>(null);
+  const tlRef = useRef<TimelineHandle>(null);
+  const [selOv, setSelOv] = useState<string | null>(null);
+  const [inspectorHost, setInspectorHost] = useState<HTMLElement | null>(null);
   const [draft, setDraft] = useState<Settings | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pendingShow = useRef<"preview" | "final" | null>(null);
@@ -89,10 +92,12 @@ export function ProjectView({ id }: { id: string }) {
     videoRef, clips: tl.clips, loaded: loadedSrc, active: view === "source" && tl.edited, playing, time, volume, muted,
     onJump: jump, onSwitch: switchTo,
   });
-  const togglePlay = useCallback(() => {
+  const togglePlay = () => {
+    if (view === "source" && tl.edited) { clipPlay.toggle(); return; }   // may be a blank clip with its own clock
     const v = videoRef.current;
     if (v) { if (v.paused) v.play().catch(() => {}); else v.pause(); }
-  }, []);
+  };
+  const playingNow = playing || (view === "source" && clipPlay.gapRunning);
 
   // keep position when switching between the original and the dubbed video (same timeline)
   const keepTime = useRef(0);
@@ -225,6 +230,7 @@ export function ProjectView({ id }: { id: string }) {
 
   const RAIL: { id: string; label: string; icon: React.ReactNode }[] = [
     { id: "lines", label: `Bản dịch${p.segments.length ? ` (${p.segments.length})` : ""}`, icon: <Languages /> },
+    { id: "props", label: "Thuộc tính đoạn / chữ / nhạc đang chọn", icon: <SlidersHorizontal /> },
     { id: "script", label: "Dịch & lồng tiếng (tuỳ chọn)", icon: <Sparkles /> },
     { id: "voice", label: "Giọng đọc", icon: <Mic /> },
     { id: "audio", label: "Âm thanh gốc", icon: <AudioLines /> },
@@ -281,10 +287,21 @@ export function ProjectView({ id }: { id: string }) {
               mask={settings.mask}
               color={settings.color}
               overlays={view === "source" ? overlays.items : []}
+              selectedOverlay={selOv}
+              editable={!locked}
+              onSelectOverlay={(id) => { setSelOv(id); if (id) setTab("props"); }}
+              onResizeOverlay={(id, size) => overlays.change(overlays.items.map((o) => (o.id === id ? { ...o, size: +size.toFixed(3) } : o)), { key: `size${id}` })}
+              onEditText={(id, text) => overlays.change(overlays.items.map((o) => (o.id === id ? { ...o, text } : o)), { key: `text${id}` })}
+              onAddText={() => tlRef.current?.addText()}
+              onAddSticker={() => tlRef.current?.addSticker()}
+              onDuplicateOverlay={() => tlRef.current?.duplicate()}
+              onDeleteOverlay={() => tlRef.current?.remove()}
+              onMoveOverlay={(id, x, y) => overlays.change(overlays.items.map((o) => (o.id === id ? { ...o, x: +x.toFixed(3), y: +y.toFixed(3) } : o)), { key: `pos${id}` })}
               outTime={clipPlay.T}
               srcId={loadedSrc}
               edited={tl.edited}
-              playing={playing}
+              playing={playingNow}
+              gap={view === "source" && clipPlay.inGap}
               volume={volume}
               muted={muted}
               onVolume={setVolume}
@@ -307,7 +324,7 @@ export function ProjectView({ id }: { id: string }) {
                 onMusic={(m) => onSettings({ music: m })}
                 idx={clipPlay.idx}
                 T={clipPlay.T}
-                playing={playing}
+                playing={playingNow}
                 showPlayhead={view === "source"}
                 disabled={locked}
                 onSeekOut={(t) => {
@@ -325,9 +342,14 @@ export function ProjectView({ id }: { id: string }) {
                   setPlaySrc(at.src);
                   setView("source");
                 }}
-                onSelectClip={clipPlay.setIdx}
+                onSelectClip={clipPlay.selectClip}
                 onTogglePlay={togglePlay}
                 onApply={apply}
+                handle={tlRef}
+                selOv={selOv}
+                setSelOv={setSelOv}
+                inspectorHost={inspectorHost}
+                onInspect={() => setTab("props")}
               />
             </div>
           </Card>
@@ -352,6 +374,7 @@ export function ProjectView({ id }: { id: string }) {
                 onPlay={onPlay}
               />
             </div>
+            <div ref={setInspectorHost} className="h-full overflow-y-auto" hidden={tab !== "props"} />
             <div className="h-full" hidden={!sectionTab}>
               <SettingsPanel
                 projectId={id}

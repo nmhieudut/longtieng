@@ -1,15 +1,17 @@
 "use client";
 
-import { Copy, Gauge, HelpCircle, ImagePlus, Loader2, Plus, Redo2, RotateCcw, RotateCw, Scissors, Trash2, Type, Undo2, Video, Volume2, ZoomIn } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Copy, Gauge, Layers, SquareDashed, HelpCircle, ImagePlus, Loader2, Plus, Redo2, RotateCcw, RotateCw, Scissors, Trash2, Type, Undo2, Video, Volume2, ZoomIn } from "lucide-react";
+import { type Ref, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { IconButton } from "@/components/ui/icon-button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { addSource, api, fileUrl, isActive, type MusicTrack, type Overlay, type Project, type Settings } from "@/lib/api";
-import { type Clip, clock, duplicateAt, full, layout, len, mapLines, MAX_SPEED, MIN_CLIP, MIN_SPEED, moveClip, removeAt, setProps, spd, splitAt, srcOf, totalLen, trans, trimEdge, uid } from "@/lib/timeline";
+import { type Clip, clock, GAP, isGap, MAX_GAP, duplicateAt, full, layout, len, mapLines, MAX_SPEED, MIN_CLIP, MIN_SPEED, moveClip, removeAt, setProps, spd, splitAt, srcOf, totalLen, trans, trimEdge, uid } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 
 import { MUSIC_H, MusicBar, MusicInspector } from "./music-track";
@@ -40,6 +42,11 @@ type Props = {
   onSelectClip: (i: number) => void;
   onTogglePlay: () => void;
   onApply: (p: Project) => void;
+  selOv: string | null;                // the selected text / sticker / video layer (shared with the video, where it can be dragged)
+  setSelOv: (id: string | null) => void;
+  inspectorHost: HTMLElement | null;   // where the properties of what is selected are drawn (the right-hand panel)
+  onInspect: () => void;               // something was selected: show that panel
+  handle?: Ref<TimelineHandle>;
 };
 
 const STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
@@ -50,7 +57,10 @@ function ToolBtn({ label, hint, onClick, off, disabled, children }: {
   return <IconButton label={label} hint={hint} variant="outline" disabled={disabled || off} onClick={onClick}>{children}</IconButton>;
 }
 
-export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusic, idx, T, showPlayhead, disabled, onSeekOut, onSelectClip, onTogglePlay, onApply }: Props) {
+/** What the video player's own buttons ask the timeline to do with texts and stickers. */
+export type TimelineHandle = { addText: () => void; addSticker: () => void; duplicate: () => void; remove: () => void };
+
+export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusic, idx, T, showPlayhead, disabled, onSeekOut, onSelectClip, onTogglePlay, onApply, selOv, setSelOv, inspectorHost, onInspect, handle }: Props) {
   const duration = p.media?.duration ?? 0;
   const { clips, commit, tweak, undo, redo } = tl;
   const rows = useMemo(() => layout(clips), [clips]);
@@ -65,10 +75,11 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
   const addInput = useRef<HTMLInputElement>(null);
   const extras = p.extra_sources ?? [];
   /** What the timeline needs to know about one video: how long it is, its thumbnails, its name. */
-  const srcInfo = (src: number) => src === 0
+  const srcInfo = (src: number) => src === GAP
+    ? { duration: MAX_GAP, film: undefined, name: "Khoảng trống" }
+    : src === 0
     ? { duration, film: p.film, name: "Video 1" }
     : (() => { const e = extras.find((x) => x.id === src); return { duration: e?.duration ?? 0, film: e?.film, name: e?.name ?? `Video ${src + 1}` }; })();
-  const [selOv, setSelOv] = useState<string | null>(null);
   const [selMusic, setSelMusic] = useState(false);
   const [tracks, setTracks] = useState<MusicTrack[]>([]);
   useEffect(() => { api.musicList().then(setTracks).catch(() => {}); }, []);
@@ -130,7 +141,18 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
     setSelected(Math.max(0, sel - 1));
   };
 
+  const addGap = () => {   // a blank part (black, silent) after the selected clip
+    const at = Math.min(sel + 1, clips.length);
+    const next = [...clips];
+    next.splice(at, 0, { id: uid(), src: GAP, start: 0, end: 2 });
+    commit(next);
+    setSelected(at);
+    onSelectClip(at);
+    onInspect();
+  };
+
   const dup = () => {
+    if (selectedOv) { pasteOverlay(selectedOv); return; }
     commit(duplicateAt(clips, sel));
     setSelected(sel + 1);
   };
@@ -146,6 +168,20 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
       ...(kind === "text" ? { text: "Nhập chữ ở đây", color: "#ffffff", box: false, bold: true } : { image }),
     }; overlays.change([...ovItems, o], { now: true });
     setSelOv(o.id);
+    onInspect();
+  };
+  const layerInput = useRef<HTMLInputElement>(null);
+  /** A video laid over the picture from the playhead on (picture in picture). */
+  const addLayer = (src: number) => {
+    const dur = srcInfo(src).duration;
+    const start = Math.min(T, Math.max(0, total - 0.5));
+    const o: Overlay = {
+      id: uid(), kind: "video", src, from: 0, start: +start.toFixed(2), end: +(start + Math.min(dur, Math.max(total - start, 3))).toFixed(2),
+      x: 0.75, y: 0.25, size: 0.4, opacity: 1, volume: 1,
+    };
+    overlays.change([...ovItems, o], { now: true });
+    setSelOv(o.id);
+    onInspect();
   };
   const addSticker = async () => {
     try {
@@ -154,6 +190,24 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
       addOverlay("image", list[0].id);
     } catch (e) { toast.error((e as Error).message); }
   };
+  // copy / paste / duplicate of the selected text, sticker or video layer (paste lands at the playhead, a little aside)
+  const clipboard = useRef<Overlay | null>(null);
+  const copyOverlay = () => { if (selectedOv) clipboard.current = selectedOv; };
+  const pasteOverlay = (src: Overlay | null = clipboard.current) => {
+    if (!src) return;
+    const length = src.end - src.start;
+    const start = Math.min(T, Math.max(0, total - Math.min(length, 0.5)));
+    const o: Overlay = { ...src, id: uid(), start: +start.toFixed(2), end: +Math.min(start + length, Math.max(total, start + 0.2)).toFixed(2),
+      x: Math.min(1, src.x + 0.04), y: Math.min(1, src.y + 0.04) };
+    if (o.kind === "video") o.end = Math.min(o.end, +(o.start + (srcInfo(o.src ?? 0).duration - (o.from ?? 0))).toFixed(2));
+    overlays.change([...ovItems, o], { now: true });
+    setSelOv(o.id);
+    onInspect();
+  };
+  const nudge = (dx: number, dy: number) => {
+    if (!selectedOv) return;
+    overlays.change(ovItems.map((o) => (o.id === selOv ? { ...o, x: Math.min(1, Math.max(0, +(o.x + dx).toFixed(3))), y: Math.min(1, Math.max(0, +(o.y + dy).toFixed(3))) } : o)), { key: `nudge${selOv}` });
+  };
   const patchOverlay = (patch: Partial<Overlay>) => {
     overlays.change(ovItems.map((o) => (o.id === selOv ? { ...o, ...patch } : o)), { key: `p${selOv}${Object.keys(patch).join()}` });
   };
@@ -161,9 +215,13 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
 
   const reset = () => { commit(full(duration)); setSelected(0); };
 
+  useImperativeHandle(handle, () => ({
+    addText: () => addOverlay("text"), addSticker, duplicate: () => { if (selectedOv) pasteOverlay(selectedOv); }, remove: removeOverlay,
+  }));
+
   // ---- keyboard (not while typing in a box). The listener is set up once and calls the latest handlers.
-  const act = useRef({ cut, del, dup, undo: doUndo, redo: doRedo, onTogglePlay });
-  useEffect(() => { act.current = { cut, del, dup, undo: doUndo, redo: doRedo, onTogglePlay }; });
+  const act = useRef({ cut, del, dup, undo: doUndo, redo: doRedo, onTogglePlay, copy: copyOverlay, paste: pasteOverlay, nudge, deselect: () => setSelOv(null), hasOv: false });
+  useEffect(() => { act.current = { cut, del, dup, undo: doUndo, redo: doRedo, onTogglePlay, copy: copyOverlay, paste: pasteOverlay, nudge, deselect: () => setSelOv(null), hasOv: !!selectedOv }; });
   useEffect(() => {
     if (disabled) return;
     const on = (e: KeyboardEvent) => {
@@ -175,7 +233,16 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); (e.shiftKey ? a.redo : a.undo)(); }
       else if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); a.redo(); }
+      else if (mod && e.key.toLowerCase() === "c" && a.hasOv) { e.preventDefault(); a.copy(); }
+      else if (mod && e.key.toLowerCase() === "v") { e.preventDefault(); a.paste(); }
+      else if (mod && e.key.toLowerCase() === "d" && a.hasOv) { e.preventDefault(); a.dup(); }
       else if (mod) return;
+      else if (a.hasOv && e.key.startsWith("Arrow")) {   // move the selected text / sticker a hair (Shift: more)
+        e.preventDefault();
+        const k = e.shiftKey ? 0.02 : 0.005;
+        a.nudge(e.key === "ArrowLeft" ? -k : e.key === "ArrowRight" ? k : 0, e.key === "ArrowUp" ? -k : e.key === "ArrowDown" ? k : 0);
+      }
+      else if (e.key === "Escape" && a.hasOv) a.deselect();
       else if (e.key === "s" || e.key === "S") { e.preventDefault(); a.cut(); }
       else if (e.key === "d" || e.key === "D") { e.preventDefault(); a.dup(); }
       else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); a.del(); }
@@ -262,6 +329,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
         <ToolBtn disabled={disabled} label="Xoá đoạn đang chọn" hint="Delete" onClick={del} off={clips.length <= 1}><Trash2 /></ToolBtn>
         <ToolBtn disabled={disabled} label="Nhân đôi đoạn đang chọn" hint="D" onClick={dup}><Copy /></ToolBtn>
         <span className="mx-1 h-5 w-px bg-border" />
+        <ToolBtn disabled={disabled} label="Thêm khoảng trống 2 giây sau đoạn đang chọn" hint="màn đen, không tiếng" onClick={addGap}><SquareDashed /></ToolBtn>
         <ToolBtn disabled={disabled || isActive(p) || addPct !== null} label="Thêm video khác vào cuối timeline" hint="nếu dự án đã dịch thì nhận dạng và dịch lời luôn"
           onClick={() => addInput.current?.click()}>{addPct !== null ? <Loader2 className="animate-spin" /> : <Video />}</ToolBtn>
         <input ref={addInput} type="file" hidden accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mkv,.m4v"
@@ -271,6 +339,27 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
             if (!f) return;
             setAddPct(0);
             try { onApply(await addSource(p.id, f, setAddPct)); toast.success("Đã thêm video, đang nhận dạng và dịch lời."); }
+            catch (err) { toast.error((err as Error).message); }
+            finally { setAddPct(null); }
+          }} />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <span><IconButton label="Chồng video lên trên (hình trong hình) từ đường chỉ" variant="outline" disabled={disabled}><Layers /></IconButton></span>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem onSelect={() => layerInput.current?.click()}><Video /> Tải video mới…</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => addLayer(0)}>Video 1 (video chính)</DropdownMenuItem>
+            {extras.map((e) => <DropdownMenuItem key={e.id} onSelect={() => addLayer(e.id)}><span className="max-w-48 truncate">{e.name}</span></DropdownMenuItem>)}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <input ref={layerInput} type="file" hidden accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mkv,.m4v"
+          onChange={async (e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (!f) return;
+            setAddPct(0);
+            try { onApply(await addSource(p.id, f, setAddPct, { at: T })); toast.success("Đã chồng video lên timeline."); }
             catch (err) { toast.error((err as Error).message); }
             finally { setAddPct(null); }
           }} />
@@ -353,9 +442,9 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
                     )}
                     style={{
                       left: at * pps, width: Math.max(w - 2, 4), height: TRACK_H,
-                      backgroundImage: info.film ? `url(${fileUrl(p.id, info.film.file)})` : undefined,
-                      backgroundSize: info.film ? `${(info.duration * pps) / spd(clip)}px 100%` : undefined,
-                      backgroundPosition: info.film ? `${(-clip.start * pps) / spd(clip)}px 0` : undefined,
+                      backgroundImage: isGap(clip) ? "repeating-linear-gradient(135deg, rgba(128,128,128,.25) 0 6px, transparent 6px 12px)" : info.film ? `url(${fileUrl(p.id, info.film.file)})` : undefined,
+                      backgroundSize: isGap(clip) ? undefined : info.film ? `${(info.duration * pps) / spd(clip)}px 100%` : undefined,
+                      backgroundPosition: isGap(clip) ? undefined : info.film ? `${(-clip.start * pps) / spd(clip)}px 0` : undefined,
                     }}
                     onPointerDown={(e) => {
                       e.stopPropagation();
@@ -363,11 +452,12 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
                       setSelOv(null);
                       setSelMusic(false);
                       onSelectClip(i);
+                      onInspect();
                       startMove(e, i);
                     }}
                     onKeyDown={(e) => { if (e.key === "Enter") setSelected(i); }}
                   >
-                    {!info.film && <Loader2 className="m-2 size-4 animate-spin text-muted-foreground" />}
+                    {!info.film && !isGap(clip) && <Loader2 className="m-2 size-4 animate-spin text-muted-foreground" />}
                     <span className="pointer-events-none absolute bottom-0.5 left-1 max-w-[90%] truncate rounded bg-black/55 px-1 text-[10px] font-medium text-white">
                       {srcOf(clip) !== 0 && <>{info.name} · </>}{clock(len(clip))}
                     </span>
@@ -408,12 +498,12 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
             </div>
 
             {/* texts and stickers */}
-            <OverlayTrack items={ovItems} pps={pps} total={total} selectedId={selOv} disabled={disabled}
-              onSelect={(id) => { setSelOv(id); setSelMusic(false); }} onChange={(next) => { overlays.change(next, { key: `drag${selOv}` }); }} onScrub={scrub} />
+            <OverlayTrack items={ovItems} pps={pps} total={total} selectedId={selOv} disabled={disabled} srcDuration={(s) => srcInfo(s).duration}
+              onSelect={(id) => { setSelOv(id); setSelMusic(false); onInspect(); }} onChange={(next) => { overlays.change(next, { key: `drag${selOv}` }); }} onScrub={scrub} />
 
             {/* background music */}
             <MusicBar music={music} tracks={tracks} total={total} pps={pps} selected={selMusic}
-              onSelect={() => { setSelMusic(true); setSelOv(null); }} />
+              onSelect={() => { setSelMusic(true); setSelOv(null); onInspect(); }} />
 
             {/* playhead */}
             {showPlayhead && (
@@ -426,13 +516,27 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
         </div>
       </div>
 
+      {inspectorHost && createPortal(
+        <div className="grid gap-3 p-3">
       {selMusic && !selectedOv && <MusicInspector music={music} tracks={tracks} disabled={disabled} onChange={onMusic} />}
 
       {selectedOv && <OverlayInspector o={selectedOv} total={total} disabled={disabled} onChange={patchOverlay} onDelete={removeOverlay} />}
 
-      {!selectedOv && !selMusic && clips[sel] && (
-        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-x-4 gap-y-2 rounded-xl border p-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Thuộc tính đoạn đang chọn">
-          <p className="text-xs font-medium sm:col-span-2 xl:col-span-4">
+      {!selectedOv && !selMusic && clips[sel] && isGap(clips[sel]) && (
+        <div className="grid min-w-0 gap-2 rounded-xl border p-3" aria-label="Thuộc tính khoảng trống">
+          <p className="text-xs font-medium">Khoảng trống {sel + 1}/{clips.length}: màn đen, không có tiếng</p>
+          <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">Độ dài
+            <span className="ml-auto font-mono text-foreground">{len(clips[sel]).toFixed(1)}s</span>
+          </Label>
+          <Slider min={0.2} max={30} step={0.1} disabled={disabled} value={[Math.min(30, len(clips[sel]))]}
+            onValueChange={([v]) => tw(clips.map((c, i) => (i === sel ? { ...c, start: 0, end: v } : c)), `gap${sel}`)} aria-label="Độ dài khoảng trống" />
+          <p className="text-[11px] text-muted-foreground">Kéo mép của khối trên timeline cũng chỉnh được độ dài. Chữ, hình dán, nhạc vẫn chạy trong khoảng trống.</p>
+        </div>
+      )}
+
+      {!selectedOv && !selMusic && clips[sel] && !isGap(clips[sel]) && (
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-x-4 gap-y-2 rounded-xl border p-3" aria-label="Thuộc tính đoạn đang chọn">
+          <p className="text-xs font-medium">
             Đoạn {sel + 1}/{clips.length} · {clock(len(clips[sel]))}
           </p>
           <div className="grid gap-2">
@@ -481,6 +585,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
           </div>
         </div>
       )}
+        </div>, inspectorHost)}
     </div>
   );
 }
