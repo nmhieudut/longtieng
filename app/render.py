@@ -138,12 +138,14 @@ def logo_text_style(st: dict, W: int, H: int) -> tuple[str, str] | None:
     if not lg["text"] or lg["image"]:
         return None
     size = max(14, int(min(W, H) * 0.035 * (lg["size"] / 0.16) ** 0.5))
-    align = {"tl": 7, "tr": 9, "bl": 1, "br": 3}[lg["position"]]
+    free = lg.get("x") is not None and lg.get("y") is not None
+    align = 5 if free else {"tl": 7, "tr": 9, "bl": 1, "br": 3}[lg["position"]]
     alpha = f"{int((1 - lg['opacity']) * 255):02X}"
     pad = int(min(W, H) * 0.04)
     style = (f"Style: Logo,{SUB_FONT},{size},&H{alpha}FFFFFF,&H000000FF,&H{alpha}000000,&H00000000,-1,0,0,0,"
              f"100,100,0,0,1,{max(1, size // 12)},0,{align},{pad},{pad},{pad},1")
-    return style, f"Dialogue: 1,0:00:00.00,9:59:59.00,Logo,,0,0,0,,{_clean(lg['text'])}"
+    pos = f"{{\\an5\\pos({int(lg['x'] * W)},{int(lg['y'] * H)})}}" if free else ""   # dragged: centred on that point
+    return style, f"Dialogue: 1,0:00:00.00,9:59:59.00,Logo,,0,0,0,,{pos}{_clean(lg['text'])}"
 
 
 def write_ass(segs, duration, media, st, path: Path, offset: float = 0.0, window: float | None = None,
@@ -219,6 +221,8 @@ def logo_filter(st: dict, g: dict, logo_in: str, v_in: str, v_out: str) -> str:
     pad = int(min(g["W"], g["H"]) * 0.04)
     x = pad if lg["position"] in ("tl", "bl") else f"main_w-overlay_w-{pad}"
     y = pad if lg["position"] in ("tl", "tr") else f"main_h-overlay_h-{pad}"
+    if lg.get("x") is not None and lg.get("y") is not None:   # dragged: centred on that point
+        x, y = f"main_w*{lg['x']:.4f}-overlay_w/2", f"main_h*{lg['y']:.4f}-overlay_h/2"
     return (f"{logo_in}scale={lw}:-2,format=rgba,colorchannelmixer=aa={lg['opacity']:.2f}[lgo];"
             f"{v_in}[lgo]overlay={x}:{y}:format=auto{v_out}")
 

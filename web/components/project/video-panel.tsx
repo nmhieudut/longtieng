@@ -5,7 +5,7 @@ import { type RefObject, useCallback, useEffect, useRef, useState } from "react"
 
 import { IconButton } from "@/components/ui/icon-button";
 import { Slider } from "@/components/ui/slider";
-import { fileUrl, fmt, type Overlay, type Project, type Settings } from "@/lib/api";
+import { desktopApi, fileUrl, fmt, type Overlay, type Project, type Settings } from "@/lib/api";
 import { colorIsDefault, cssFilter, vignetteOverlay, warmthOverlay } from "@/lib/color";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +25,10 @@ type Props = {
   edited: boolean;         // the timeline has cuts, so an exported video is in another time than the lines
   overlays: Overlay[];     // texts and stickers (output time), shown roughly over the original video
   outTime: number;         // playhead in output time
+  logo: Settings["logo"];
+  onMoveLogo: (x: number, y: number) => void;       // while dragging
+  onCommitLogo: () => void;                         // let go: save
+  onResizeLogo: (size: number) => void;
   selectedOverlay: string | null;
   editable: boolean;       // overlays can be dragged on the picture
   onSelectOverlay: (id: string | null) => void;
@@ -56,7 +60,7 @@ const VIEWS = [
 
 export function VideoPanel({
   project: p, videoRef, src, view, onView, time, activeIdx, mask, color, srcId, edited, overlays, outTime,
-  selectedOverlay, editable, onSelectOverlay, onMoveOverlay, onResizeOverlay, onEditText, onAddText, onAddSticker, onDuplicateOverlay, onDeleteOverlay, playing, gap, volume, muted, onVolume, onMuted, onTogglePlay, scrub, onSeek, onTime, onLoaded,
+  logo, onMoveLogo, onCommitLogo, onResizeLogo, selectedOverlay, editable, onSelectOverlay, onMoveOverlay, onResizeOverlay, onEditText, onAddText, onAddSticker, onDuplicateOverlay, onDeleteOverlay, playing, gap, volume, muted, onVolume, onMuted, onTogglePlay, scrub, onSeek, onTime, onLoaded,
 }: Props) {
   const box = useMaskBox(videoRef, src);
   const stage = useRef<HTMLDivElement>(null);
@@ -70,11 +74,15 @@ export function VideoPanel({
   const warm = live ? warmthOverlay(color) : null;
   const vig = live ? vignetteOverlay(color) : null;
 
+  // Full screen: the picture fills the app window (works in every web view); in the desktop app the window itself
+  // goes full screen too. Esc leaves.
   useEffect(() => {
-    const on = () => setFull(document.fullscreenElement === stage.current);
-    document.addEventListener("fullscreenchange", on);
-    return () => document.removeEventListener("fullscreenchange", on);
-  }, []);
+    if (!full) return;
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setFull(false); };
+    window.addEventListener("keydown", esc);
+    desktopApi()?.fullscreen(true).catch(() => {});
+    return () => { window.removeEventListener("keydown", esc); desktopApi()?.fullscreen(false).catch(() => {}); };
+  }, [full]);
 
   const max = scrub ? scrub.max : view === "source" ? dur : vdur || dur;
   const value = scrub ? scrub.value : time;
@@ -108,19 +116,56 @@ export function VideoPanel({
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
+  // the channel logo / name: drag it anywhere, corner handles resize it (what you see is the position it exports at)
+  const logoOn = !!(logo.image || logo.text);
+  const logoPos = box && logoOn ? (() => {
+    const pad = Math.min(box.w, box.h) * 0.04;
+    if (logo.x != null && logo.y != null) return { cx: box.x + logo.x * box.w, cy: box.y + logo.y * box.h };
+    return { cx: box.x + (logo.position.endsWith("l") ? pad : box.w - pad), cy: box.y + (logo.position.startsWith("t") ? pad : box.h - pad), corner: logo.position };
+  })() : null;
+  const startLogoDrag = (e: React.PointerEvent) => {
+    if (!box) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onSelectOverlay("logo");
+    const el = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const sr = (e.currentTarget as HTMLElement).closest("[data-stage]")!.getBoundingClientRect();
+    // start from where the logo is drawn now (a corner position becomes a free one on the first move)
+    const x0 = e.clientX, y0 = e.clientY;
+    const cx0 = (el.left + el.width / 2 - sr.left - box.x) / box.w, cy0 = (el.top + el.height / 2 - sr.top - box.y) / box.h;
+    let moved = false;
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3) return;
+      moved = true;
+      onMoveLogo(Math.min(1, Math.max(0, cx0 + (ev.clientX - x0) / box.w)), Math.min(1, Math.max(0, cy0 + (ev.clientY - y0) / box.h)));
+    };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); if (moved) onCommitLogo(); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  const startLogoResize = (e: React.PointerEvent) => {
+    if (!box) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const host = (e.currentTarget as HTMLElement).parentElement!.getBoundingClientRect();
+    const cx = host.left + host.width / 2, cy = host.top + host.height / 2;
+    const d0 = Math.max(8, Math.hypot(e.clientX - cx, e.clientY - cy));
+    const move = (ev: PointerEvent) => onResizeLogo(Math.min(0.4, Math.max(0.05, logo.size * (Math.hypot(ev.clientX - cx, ev.clientY - cy) / d0))));
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); onCommitLogo(); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
   const go = (t: number) => {
     if (scrub) { scrub.seek(t); return; }
     const v = videoRef.current;
     if (v) { v.currentTime = t; onTime(t); }
   };
-  const fullscreen = () => {
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    else stage.current?.requestFullscreen().catch(() => {});
-  };
+  const fullscreen = () => setFull((f) => !f);
+
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
-      <div ref={stage} data-stage className="group/stage relative min-h-0 flex-1 overflow-hidden rounded-xl bg-black">
+      <div ref={stage} data-stage className={cn("group/stage min-h-0 flex-1 overflow-hidden bg-black", full ? "fixed inset-0 z-[100]" : "relative rounded-xl")}>
         {src ? (
           <video
             ref={videoRef}
@@ -201,6 +246,25 @@ export function VideoPanel({
             </div>
           );
         })}
+        {logoPos && box && view === "source" && (
+          <div onPointerDown={editable ? startLogoDrag : undefined}
+            className={cn("absolute", editable ? "cursor-grab active:cursor-grabbing" : "pointer-events-none", editable && selectedOverlay === "logo" && "outline outline-2 outline-offset-2 outline-primary")}
+            style={{
+              opacity: logo.opacity, transform: logo.x != null || !logoPos.corner ? "translate(-50%, -50%)" : `translate(${logoPos.corner.endsWith("l") ? "0" : "-100%"}, ${logoPos.corner.startsWith("t") ? "0" : "-100%"})`,
+              left: logoPos.cx, top: logoPos.cy, ...(logo.image ? { width: logo.size * box.w } : {}),
+            }}>
+            {logo.image ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={`/api/logos/${logo.image}/file`} alt="" draggable={false} className="block w-full select-none" />
+            ) : (
+              <span className="select-none whitespace-nowrap font-bold text-white" style={{ fontSize: Math.min(box.w, box.h) * 0.035 * Math.sqrt(logo.size / 0.16), textShadow: "0 0 3px #000, 0 0 3px #000" }}>{logo.text}</span>
+            )}
+            {editable && selectedOverlay === "logo" && (["-left-1.5 -top-1.5 cursor-nwse-resize", "-right-1.5 -top-1.5 cursor-nesw-resize",
+              "-bottom-1.5 -left-1.5 cursor-nesw-resize", "-bottom-1.5 -right-1.5 cursor-nwse-resize"] as const).map((pos) => (
+              <span key={pos} onPointerDown={startLogoResize} className={cn("absolute size-3 rounded-sm border-2 border-primary bg-white", pos)} />
+            ))}
+          </div>
+        )}
         {mask.enabled && view === "source" && box && (
           <div
             className="pointer-events-none absolute border-2 border-dashed border-orange-300 bg-orange-300/15"

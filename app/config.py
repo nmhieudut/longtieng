@@ -331,6 +331,8 @@ DEFAULT_SETTINGS = {
         "image": None,         # id in the shared logo library
         "text": "",            # or a channel name, e.g. "@kenhcuatoi"
         "position": "tr",      # tl | tr | bl | br
+        "x": None,             # dragged anywhere: centre as a fraction of the picture (both None = use `position`)
+        "y": None,
         "size": 0.16,          # logo width as a fraction of the video width
         "opacity": 0.85,
     },

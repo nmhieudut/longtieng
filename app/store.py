@@ -75,6 +75,10 @@ def clean_settings(s: dict) -> dict:
     lg["text"] = str(lg["text"] or "").strip()[:40]
     lg["size"] = min(0.4, max(0.05, float(lg["size"])))
     lg["opacity"] = min(1.0, max(0.2, float(lg["opacity"])))
+    try:
+        lg["x"], lg["y"] = min(1.0, max(0.0, float(lg["x"]))), min(1.0, max(0.0, float(lg["y"])))
+    except (TypeError, ValueError):
+        lg["x"] = lg["y"] = None
     if lg["image"] is not None and not isinstance(lg["image"], str):
         lg["image"] = None
     return s

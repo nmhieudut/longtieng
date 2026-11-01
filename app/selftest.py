@@ -274,7 +274,7 @@ def _pipeline(clip: Path) -> str:
             # no dubbing at all: import without starting, cut + colour, export. The original sound stays, no lines
             with open(clip, "rb") as f:
                 r = c.post("/api/projects/upload", files={"file": ("edit.mp4", f, "video/mp4")},
-                           data={"settings": '{"color":{"brightness":10},"export":{"loudnorm":true,"quality":"high"}}', "start": "false"})
+                           data={"settings": '{"color":{"brightness":10},"export":{"loudnorm":true,"quality":"high"},"logo":{"text":"@kenh","x":0.3,"y":0.7}}', "start": "false"})
             r.raise_for_status()
             eid = r.json()["id"]
             D2 = r.json()["media"]["duration"]

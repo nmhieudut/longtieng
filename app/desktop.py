@@ -84,6 +84,14 @@ class Api:
         self._base = base
         self._window = None
 
+    def fullscreen(self, on: bool) -> None:
+        """The whole window full screen (the web view cannot do element fullscreen by itself)."""
+        try:
+            if self._window and bool(self._window.fullscreen if hasattr(self._window, "fullscreen") else False) != bool(on):
+                self._window.toggle_fullscreen()
+        except Exception:
+            pass
+
     def save_file(self, url: str) -> dict:
         import urllib.parse
         import urllib.request

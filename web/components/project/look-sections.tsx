@@ -133,7 +133,7 @@ export function LogoSection({ s, disabled, change }: { s: Settings; disabled: bo
 
   return (
     <Section value="logo" icon={<Stamp />} title="Logo kênh"
-      summary={current ? `${current.name} · ${CORNERS.find((c) => c.v === lg.position)?.label}` : lg.text ? lg.text : "Không"}>
+      summary={current ? `${current.name} · ${lg.x != null ? "đặt tự do" : CORNERS.find((c) => c.v === lg.position)?.label}` : lg.text ? lg.text : "Không"}>
       <Field label="Logo ảnh (PNG nền trong suốt đẹp nhất)">
         <div className="flex flex-wrap items-center gap-2 p-1">
           <button type="button" disabled={disabled} onClick={() => change({ logo: { image: null } })}
@@ -174,11 +174,12 @@ export function LogoSection({ s, disabled, change }: { s: Settings; disabled: bo
           <Field label="Vị trí">
             <div className="grid w-40 grid-cols-2 gap-1.5 rounded-lg border p-1.5">
               {CORNERS.map((c) => (
-                <button key={c.v} type="button" disabled={disabled} onClick={() => change({ logo: { position: c.v } })}
+                <button key={c.v} type="button" disabled={disabled} onClick={() => change({ logo: { position: c.v, x: null, y: null } })}
                   className={cn("rounded-md px-2 py-1.5 text-[11px] hover:bg-muted",
-                    lg.position === c.v && "bg-primary text-primary-foreground hover:bg-primary")}>{c.label}</button>
+                    lg.x == null && lg.position === c.v && "bg-primary text-primary-foreground hover:bg-primary")}>{c.label}</button>
               ))}
             </div>
+            <p className="mt-1.5 text-xs text-muted-foreground">Hoặc kéo logo / tên kênh ngay trên video để đặt chỗ tuỳ ý, kéo góc để đổi cỡ.{lg.x != null && " Đang đặt tự do."}</p>
           </Field>
           <SliderField label="Kích thước" value={lg.size} min={0.05} max={0.4} step={0.01} disabled={disabled}
             show={(v) => `${Math.round(v * 100)}%`} onChange={(v) => change({ logo: { size: v } })} />

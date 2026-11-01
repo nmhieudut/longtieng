@@ -64,6 +64,9 @@ export function ProjectView({ id }: { id: string }) {
   const [selOv, setSelOv] = useState<string | null>(null);
   const [inspectorHost, setInspectorHost] = useState<HTMLElement | null>(null);
   const [draft, setDraft] = useState<Settings | null>(null);
+  const draftRef = useRef<Settings | null>(null);   // the same value, for handlers that outlive a render (a drag)
+  const [logoSel, setLogoSel] = useState(false);
+  const putDraft = (d: Settings | null) => { draftRef.current = d; setDraft(d); };
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pendingShow = useRef<"preview" | "final" | null>(null);
   const pendingSeek = useRef<number | null>(null);
@@ -312,9 +315,13 @@ export function ProjectView({ id }: { id: string }) {
               mask={settings.mask}
               color={settings.color}
               overlays={view === "source" ? overlays.items : []}
-              selectedOverlay={selOv}
+              logo={settings.logo}
+              onMoveLogo={(x, y) => putDraft({ ...settings, logo: { ...settings.logo, x, y } })}
+              onResizeLogo={(size) => putDraft({ ...settings, logo: { ...(draftRef.current ?? settings).logo, size } })}
+              onCommitLogo={() => { const lg = draftRef.current?.logo; if (lg) onSettings({ logo: { x: lg.x, y: lg.y, size: lg.size } }).then(() => putDraft(null)); }}
+              selectedOverlay={logoSel ? "logo" : selOv}
               editable={!locked}
-              onSelectOverlay={(id) => { setSelOv(id); if (id) setTab("props"); }}
+              onSelectOverlay={(id) => { setLogoSel(id === "logo"); if (id === "logo") { setSelOv(null); setTab("look"); } else { setSelOv(id); if (id) setTab("props"); } }}
               onResizeOverlay={(id, size) => overlays.change(overlays.items.map((o) => (o.id === id ? { ...o, size: +size.toFixed(3) } : o)), { key: `size${id}` })}
               onEditText={(id, text) => overlays.change(overlays.items.map((o) => (o.id === id ? { ...o, text } : o)), { key: `text${id}` })}
               onAddText={() => tlRef.current?.addText()}

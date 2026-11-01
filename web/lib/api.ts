@@ -33,7 +33,7 @@ export type Settings = {
   mask: { enabled: boolean; auto: boolean; style: "blur" | "box"; bottom: number; height: number };
   frame: { aspect: "original" | "9:16" | "16:9" | "1:1" | "4:5"; fit: "blur" | "crop"; zoom: number };
   color: { brightness: number; contrast: number; saturation: number; temperature: number; sharpness: number; vignette: number };
-  logo: { image: string | null; text: string; position: "tl" | "tr" | "bl" | "br"; size: number; opacity: number };
+  logo: { image: string | null; text: string; position: "tl" | "tr" | "bl" | "br"; x: number | null; y: number | null; size: number; opacity: number };
   export: { quality: "fast" | "balanced" | "high"; hw: boolean; loudnorm: boolean };
   sub_style: string;
   script: { mode: "translate" | "review"; style: string };
@@ -250,6 +250,7 @@ type DesktopApi = {
   reveal: (path: string) => Promise<void>;
   pick_folder: (start?: string) => Promise<string | null>;
   copy: (text: string) => Promise<void>;
+  fullscreen: (on: boolean) => Promise<void>;
 };
 export const desktopApi = (): DesktopApi | undefined =>
   typeof window === "undefined" ? undefined : (window as unknown as { pywebview?: { api?: DesktopApi } }).pywebview?.api;
