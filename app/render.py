@@ -512,31 +512,45 @@ def build_filters(proj_dir: Path, proj: dict, bg_label: str | None, start: float
     return ";".join(chain)
 
 
-_HW: dict[str, bool] = {}
+_HW: dict[str, str] = {}
+
+
+def hw_encoder() -> str:
+    """"videotoolbox" (Mac), "nvenc" (NVIDIA card) or "" (none): the hardware H.264 encoder this ffmpeg can really use."""
+    if "kind" not in _HW:
+        kind = ""
+        try:
+            if sys.platform == "darwin":
+                if "h264_videotoolbox" in cancel.run([FFMPEG, "-hide_banner", "-encoders"], timeout=20).stdout:
+                    kind = "videotoolbox"
+            elif sys.platform == "win32":
+                # listed is not the same as working (no card, old driver): try to encode one tiny frame
+                r = cancel.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=256x256:r=25", "-frames:v", "2",
+                                "-c:v", "h264_nvenc", "-f", "null", "-"], timeout=30)
+                if r.returncode == 0:
+                    kind = "nvenc"
+        except Exception:
+            kind = ""
+        _HW["kind"] = kind
+    return _HW["kind"]
 
 
 def hw_encoder_available() -> bool:
-    """The Mac's VideoToolbox H.264 encoder, if this ffmpeg was built with it."""
-    if "h264" not in _HW:
-        ok = False
-        if sys.platform == "darwin":
-            try:
-                r = cancel.run([FFMPEG, "-hide_banner", "-encoders"], timeout=20)
-                ok = "h264_videotoolbox" in r.stdout
-            except Exception:
-                ok = False
-        _HW["h264"] = ok
-    return _HW["h264"]
+    return bool(hw_encoder())
 
 
 def video_encoder(ex: dict, preview: bool, media: dict) -> list[str]:
     """ffmpeg arguments for the output video. A preview is always the fastest software encode (it is thrown away)."""
     q = ex.get("quality", "balanced")
-    if not preview and ex.get("hw", True) and hw_encoder_available():
+    kind = "" if preview or not ex.get("hw", True) else hw_encoder()
+    if kind == "videotoolbox":
         # hardware encoders take a bitrate, not a quality: scale it with the picture size (about 8 Mbit/s at 1080x1920)
         px = max(1, int(media.get("width", 1080)) * int(media.get("height", 1920)))
         mbit = {"fast": 6.0, "balanced": 9.0, "high": 14.0}[q] * min(1.5, max(0.4, px / (1080 * 1920)))
         return ["-c:v", "h264_videotoolbox", "-b:v", f"{mbit:.1f}M", "-allow_sw", "1"]
+    if kind == "nvenc":   # constant quality, like crf
+        cq, preset = {"fast": ("29", "p3"), "balanced": ("24", "p5"), "high": ("20", "p6")}[q]
+        return ["-c:v", "h264_nvenc", "-preset", preset, "-rc", "vbr", "-cq", cq, "-b:v", "0"]
     if preview:
         return ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "20"]
     preset, crf = {"fast": ("veryfast", "24"), "balanced": ("veryfast", "20"), "high": ("slow", "17")}[q]
@@ -636,6 +650,11 @@ def render(proj_dir: Path, proj: dict, out: Path, bg: Path | None,
     if cancel.requested() or proc.returncode != 0:
         part.unlink(missing_ok=True)
     cancel.check()
+    used_hw = (proj["settings"].get("export") or {}).get("hw", True) and not length and hw_encoder()
+    if proc.returncode != 0 and used_hw:   # the card or its driver refused (too many sessions, old driver): do it in software
+        print(f"[render] bộ mã hoá phần cứng lỗi, thử lại bằng phần mềm: {''.join(errs)[-200:]}", flush=True)
+        ex = (proj["settings"].get("export") or {}) | {"hw": False}
+        return render(proj_dir, proj | {"settings": proj["settings"] | {"export": ex}}, out, bg, start, length, on_progress)
     if proc.returncode != 0:
         raise MediaError("Render lỗi:\n" + "\n".join(err.strip().splitlines()[-8:]))
     part.replace(out)

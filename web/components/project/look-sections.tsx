@@ -370,7 +370,7 @@ export function ExportSection({ s, canHw, disabled, change, qc }: { s: Settings;
       </Field>
       {canHw && (
         <label className="flex items-center justify-between gap-3 text-sm">
-          <span>Mã hoá bằng phần cứng của Mac<span className="block text-xs text-muted-foreground">Nhanh hơn nhiều, file hơi lớn hơn.</span></span>
+          <span>Mã hoá bằng chip/card đồ hoạ (Mac, NVIDIA)<span className="block text-xs text-muted-foreground">Nhanh hơn nhiều. Lỗi thì tự chạy lại bằng phần mềm.</span></span>
           <Switch checked={ex.hw} disabled={disabled} onCheckedChange={(v) => change({ export: { hw: v } })} />
         </label>
       )}

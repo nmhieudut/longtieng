@@ -222,7 +222,7 @@ export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
                 <SelectItem value="tiny">Cực nhanh: kém chính xác</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">Máy không có GPU Apple nhận dạng bằng CPU. Nếu video 5–10 phút mà mất cả tiếng, chọn “Nhanh” hoặc “Rất nhanh”. Model nhỏ hơn tải về một lần (vài chục đến vài trăm MB).</p>
+            <p className="text-xs text-muted-foreground">Máy không có chip Apple nhận dạng bằng CPU. Tự chọn sẽ đo tốc độ máy lần đầu: máy mạnh dùng model chuẩn (và chế độ chính xác hơn nếu còn dư tốc độ), máy yếu tự giảm model để không phải chờ quá lâu. Nếu video 5–10 phút mà mất cả tiếng, chọn “Nhanh” hoặc “Rất nhanh”.</p>
           </div>
         )}
 

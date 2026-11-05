@@ -29,7 +29,7 @@ def engine() -> str:
 
 
 def engine_label() -> str:
-    return "Whisper turbo (Apple GPU)" if engine() == "mlx" else "Whisper turbo (CPU)"
+    return "Whisper turbo (Apple GPU)" if engine() == "mlx" else f"Whisper {fw_name()} (CPU)"
 
 
 def _repo() -> str:
@@ -181,12 +181,18 @@ def _threads() -> int:
         n = psutil.cpu_count(logical=False) or 0
     except Exception:
         n = 0
-    return max(2, min(8, n or (os.cpu_count() or 4) // 2))
+    return max(2, min(12, n or (os.cpu_count() or 4) // 2))
 
 
 def _load_fw(name_repo: str):
     from faster_whisper import WhisperModel
     return WhisperModel(name_repo, device="cpu", compute_type="int8", cpu_threads=_threads())
+
+
+def _beam() -> int:
+    """A machine that is much faster than it needs to be (measured the first time) spends the spare speed on accuracy."""
+    rtf = user_settings().get("stt_rtf")
+    return 5 if fw_pref() == "auto" and isinstance(rtf, (int, float)) and rtf < 0.25 else 1
 
 
 def _faster(samples, language, prompt, on_progress, on_note=None):
@@ -211,17 +217,21 @@ def _faster(samples, language, prompt, on_progress, on_note=None):
             while k < len(FW_CHAIN) - 1 and rtf * total / (2.7 ** (k - FW_CHAIN.index(name))) > MAX_STT_MINUTES * 60:
                 k += 1
             print(f"[stt] {name}: {rtf:.2f}x thời gian thực; video {total:.0f}s -> dùng {FW_CHAIN[k]}", flush=True)
-            save_user_settings({"stt_auto": FW_CHAIN[k], "stt_rtf": round(rtf, 2)})
+            save_user_settings({"stt_auto": FW_CHAIN[k], "stt_rtf": round(rtf / 2.7 ** (k - FW_CHAIN.index(name)), 2)})
             if FW_CHAIN[k] != name:
                 if on_note:
                     on_note(f"Máy này nhận dạng hơi chậm (khoảng {rtf:.1f}× thời gian video), nên dùng model nhỏ hơn "
                             f"({FW_CHAIN[k]}) cho nhanh. Đổi lại trong Cài đặt → Nhận dạng giọng nói.")
                 _ensure_for_switch(on_note)
                 _fw_model, _fw_loaded = _load_fw(_repo()), _repo()
-    segments, info = _fw_model.transcribe(
+        return _run_fw(_fw_model, samples, language, prompt, on_progress)
+
+
+def _run_fw(model, samples, language, prompt, on_progress):
+    segments, info = model.transcribe(
         samples,
         language=language,
-        beam_size=1,                        # greedy, like mlx-whisper; much faster on CPU
+        beam_size=_beam(),                  # 1 = greedy (fast); 5 on a machine with speed to spare
         vad_filter=True,                    # skip music and silence: on a CPU that is most of the saved time
         vad_parameters={"min_silence_duration_ms": 500},
         condition_on_previous_text=False,
