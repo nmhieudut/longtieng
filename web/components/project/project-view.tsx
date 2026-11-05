@@ -89,6 +89,20 @@ export function ProjectView({ id }: { id: string }) {
     }
   }, [p]);
 
+  // the quality check of an export is written a little after the export itself: look for it for a minute
+  const finalAt = p?.outputs.final?.at ?? 0;
+  const qcAt = p?.qc?.at ?? 0;
+  const waitingQc = !!p && finalAt > 0 && qcAt < finalAt && !isActive(p);
+  useEffect(() => {
+    if (!waitingQc) return;
+    let n = 0;
+    const t = setInterval(() => {
+      api.get(id).then((q) => { if (q.qc && q.qc.at >= finalAt) apply(q); }).catch(() => {});
+      if (++n >= 20) clearInterval(t);
+    }, 3000);
+    return () => clearInterval(t);
+  }, [waitingQc, finalAt, id, apply]);
+
   // a video that was removed from the project can no longer be the loaded one
   const loadedSrc = !p || playSrc === 0 || p.extra_sources?.some((e) => e.id === playSrc) ? playSrc : 0;
   const src = useMemo(() => {
@@ -279,6 +293,7 @@ export function ProjectView({ id }: { id: string }) {
         project={p}
         previewAt={outAt}
         onOpenDub={() => { setTab("dub"); setDubView("config"); }}
+        onRestore={apply}
         onSaveToFolder={async () => { await run(() => api.saveToFolder(id)); }}
         onRetry={() => run(() => api.retry(id))}
         onCancel={() => run(() => api.cancel(id))}
@@ -464,6 +479,7 @@ export function ProjectView({ id }: { id: string }) {
                 sourceLangs={cfg?.langs ?? {}}
                 langLocked={p.segments.length > 0 || (busy && !locked)}
                 canHw={cfg?.features.hw_encoder ?? false}
+                qc={p.qc}
                 onDub={() => run(async () => { await flushAll(); return p.status.stage === "error" && !p.segments.length ? api.retry(id) : p.segments.length ? api.rewrite(id) : api.start(id, false); })}
                 previewAt={previewAt}
                 subStyles={cfg?.sub_styles ?? {}}

@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from . import dub, jobs, logos, media, music, ocr, outdir, overlays, publish, vieneu_tts, render, store, stt, timeline, translate, update
+from . import dub, jobs, logos, media, music, ocr, outdir, overlays, publish, qc, trim, versions, vieneu_tts, render, store, stt, timeline, translate, update
 from .frame import ASPECTS
 from .media import MediaError
 from .config import (
@@ -177,6 +177,9 @@ def app_settings():
         "openai_key_hint": _mask_key(k),
         "stt_engine": stt.engine_label(),
         "stt_model_ready": stt.model_cached(),
+        "stt_cpu": stt.engine() == "faster",
+        "stt_model": stt.fw_pref(),
+        "stt_used": stt.fw_name() if stt.engine() == "faster" else None,
         "data_dir": str(USER_DIR),
         "output_dir": str(outdir.current() or ""),
         "output_suggestions": outdir.suggestions(),
@@ -226,6 +229,8 @@ def put_app_settings(body: dict = Body(...)):
                     raise HTTPException(502, "Không kết nối được OpenAI để kiểm tra key. Kiểm tra mạng rồi thử lại.")
                 raise HTTPException(400, f"OpenAI từ chối key ({name}).")
         save_user_settings({"openai_key": k})
+    if body.get("stt_model") in ("auto", *stt.FW_CHAIN):
+        save_user_settings({"stt_model": body["stt_model"], "stt_auto": None} if body["stt_model"] == "auto" else {"stt_model": body["stt_model"]})
     if isinstance(body.get("output_dir"), str):
         raw = body["output_dir"].strip()
         try:
@@ -675,6 +680,49 @@ def put_timeline(pid: str, body: dict = Body(...)):
             q["timeline"] = {"clips": clips}
         q["edited_at"] = time.time()  # the exported video no longer matches
     return _view(store.update(pid, fn))
+
+
+@app.post("/api/projects/{pid}/trim-silence")
+def trim_silence_endpoint(pid: str, body: dict = Body(...)):
+    """Which parts of a clip to keep when its silent stretches are cut out (nothing is changed here)."""
+    p = _load(pid)
+    try:
+        src, a, b = int(body.get("src", 0)), float(body["start"]), float(body["end"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, "Đoạn không hợp lệ.")
+    if src == 0 and not p.get("media", {}).get("has_audio", True):
+        raise HTTPException(400, "Video này không có tiếng.")
+    if src != 0 and not next((e for e in timeline.extra_sources(p) if e["id"] == src), {}).get("has_audio", True):
+        raise HTTPException(400, "Video này không có tiếng.")
+    try:
+        path = timeline.source_path(store.pdir(pid), p, src)
+        return trim.analyze(path, a, b, str(body.get("profile", "default")))
+    except MediaError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/projects/{pid}/versions")
+def get_versions(pid: str):
+    _load(pid)
+    return versions.list_versions(pid)
+
+
+@app.post("/api/projects/{pid}/versions")
+def make_version(pid: str, body: dict = Body({})):
+    _load(pid)
+    versions.snapshot(pid, str(body.get("label") or "Lưu tay"))
+    return versions.list_versions(pid)
+
+
+@app.post("/api/projects/{pid}/versions/{vid}/restore")
+def restore_version(pid: str, vid: str):
+    p = _load(pid)
+    if jobs.busy(pid) and p["status"]["stage"] in RENDER_STAGES:
+        raise HTTPException(409, "Đang xuất video, đợi xong rồi khôi phục.")
+    out = versions.restore(pid, vid)
+    if out is None:
+        raise HTTPException(404, "Không có phiên bản này.")
+    return _view(out)
 
 
 @app.put("/api/projects/{pid}/overlays")

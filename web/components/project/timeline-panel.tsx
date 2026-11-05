@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, Gauge, Layers, SquareDashed, HelpCircle, ImagePlus, Loader2, Redo2, RotateCcw, Scissors, Trash2, Type, Undo2, Video, Volume2, ZoomIn } from "lucide-react";
+import { AudioLines, Copy, Gauge, Layers, SquareDashed, HelpCircle, ImagePlus, Loader2, Redo2, RotateCcw, Scissors, Trash2, Type, Undo2, Video, Volume2, ZoomIn } from "lucide-react";
 import { type Ref, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ import { addSource, api, fileUrl, isActive, type MusicTrack, type Overlay, type 
 import { type Clip, clock, GAP, isGap, MAX_GAP, duplicateAt, full, layout, len, mapLines, MAX_SPEED, MIN_CLIP, MIN_SPEED, moveClip, removeAt, setProps, spd, splitAt, srcOf, totalLen, trans, trimEdge, uid } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 
+import { SilenceDialog } from "./silence-dialog";
 import { MUSIC_H, MusicBar, MusicInspector } from "./music-track";
 import { OVERLAY_H, OverlayInspector, OverlayTrack, overlayLanes } from "./overlay-editor";
 import type { EditLog } from "./edit-log";
@@ -146,6 +147,22 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
     setSelected(Math.max(0, sel - 1));
   };
 
+  const [silenceOpen, setSilenceOpen] = useState(false);
+  /** The selected clip becomes the parts of it worth keeping (same speed, volume; fades only at the ends). */
+  const applySilenceCut = (keep: [number, number][]) => {
+    const c = clips[sel];
+    if (!c || !keep.length) return;
+    const parts: Clip[] = keep.map(([a, b], k) => ({
+      ...c, id: uid(), start: a, end: b,
+      fade_in: k === 0 ? c.fade_in : 0, fade_out: k === keep.length - 1 ? c.fade_out : 0, transition: k === 0 ? c.transition : 0,
+    }));
+    const next = [...clips];
+    next.splice(sel, 1, ...parts);
+    commit(next);
+    setSelected(sel);
+    onSelectClip(sel);
+    toast.success(`Đã cắt khoảng lặng: ${parts.length} đoạn.`);
+  };
   const addGap = () => {   // a blank part (black, silent) after the selected clip
     const at = Math.min(sel + 1, clips.length);
     const next = [...clips];
@@ -449,6 +466,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
         <ToolBtn disabled={disabled} label="Xoá đoạn đang chọn" hint="Delete" onClick={del} off={clips.length <= 1}><Trash2 /></ToolBtn>
         <ToolBtn disabled={disabled} label="Nhân đôi đoạn đang chọn" hint="D" onClick={dup}><Copy /></ToolBtn>
         <span className="mx-1 h-5 w-px bg-border" />
+        <ToolBtn disabled={disabled || !clips[sel] || isGap(clips[sel]) || len(clips[sel]) < 1.5 || (srcOf(clips[sel]) !== 0 && extras.find((e) => e.id === srcOf(clips[sel]))?.has_audio === false)} label="Cắt khoảng lặng của đoạn đang chọn (cần video có tiếng)" hint="bỏ chỗ im lặng, kiểu jump cut" onClick={() => setSilenceOpen(true)}><AudioLines /></ToolBtn>
         <ToolBtn disabled={disabled} label="Thêm khoảng trống 2 giây sau đoạn đang chọn" hint="màn đen, không tiếng" onClick={addGap}><SquareDashed /></ToolBtn>
         <ToolBtn disabled={disabled || isActive(p) || addPct !== null} label="Thêm video (chọn được nhiều file) vào cuối timeline, hoặc kéo file thả vào timeline" hint="dự án đã dịch thì nhận dạng và dịch lời luôn"
           onClick={() => addInput.current?.click()}>{addPct !== null ? <Loader2 className="animate-spin" /> : <Video />}</ToolBtn>
@@ -624,6 +642,10 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
         </div>
       </div>
 
+      {clips[sel] && !isGap(clips[sel]) && (
+        <SilenceDialog open={silenceOpen} onOpenChange={setSilenceOpen} projectId={p.id} src={srcOf(clips[sel])}
+          start={clips[sel].start} end={clips[sel].end} onApply={applySilenceCut} />
+      )}
       {inspectorHost && createPortal(
         <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 p-3">
       {selMusic && !selectedOv && <MusicInspector music={music} tracks={tracks} disabled={disabled} onChange={onMusic} />}

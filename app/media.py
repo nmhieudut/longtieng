@@ -39,6 +39,9 @@ def probe(path: Path) -> dict:
     info = json.loads(r.stdout)
     v = next((s for s in info["streams"] if s["codec_type"] == "video"), None)
     a = next((s for s in info["streams"] if s["codec_type"] == "audio"), None)
+    # a "video" that is really a playlist (hls, concat, dash) would make ffmpeg read other files or URLs
+    if set(str(info["format"].get("format_name", "")).split(",")) & {"hls", "applehttp", "concat", "ffconcat", "dash", "sdp", "rtsp"}:
+        raise MediaError("Đây không phải file video thật (danh sách phát hoặc liên kết), nên không dùng được.")
     if not v:
         raise MediaError("File không có hình (không phải video).")
     w, h = int(v["width"]), int(v["height"])
@@ -54,6 +57,7 @@ def probe(path: Path) -> dict:
         "height": h,
         "vcodec": v.get("codec_name"),
         "has_audio": a is not None,
+        "hdr": v.get("color_transfer") in ("smpte2084", "arib-std-b67"),   # HDR10 / HLG (iPhone): looks grey unless tone-mapped
     }
 
 

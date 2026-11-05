@@ -1,6 +1,6 @@
 "use client";
 
-import { Crop, ImagePlus, Languages, Loader2, Palette, RotateCcw, Rocket, Sparkles, Stamp, Trash2, Wand2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Crop, ImagePlus, Languages, Loader2, Palette, RotateCcw, Rocket, Sparkles, Stamp, Trash2, Wand2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { api, type DeepPartial, type Logo, logoUrl, type Settings } from "@/lib/api";
+import { api, type DeepPartial, type Logo, logoUrl, type Project, type Settings } from "@/lib/api";
 import { COLOR_PRESETS, COLOR_ZERO, colorIsDefault, sameColor } from "@/lib/color";
 import { cn } from "@/lib/utils";
 
@@ -334,11 +334,22 @@ const PLATFORMS: { label: string; aspect: Settings["frame"]["aspect"]; hint: str
   { label: "Giữ nguyên khung gốc", aspect: "original", hint: "như video gốc" },
 ];
 
-export function ExportSection({ s, canHw, disabled, change }: { s: Settings; canHw: boolean; disabled: boolean; change: Change }) {
+export function ExportSection({ s, canHw, disabled, change, qc }: { s: Settings; canHw: boolean; disabled: boolean; change: Change; qc?: Project["qc"] }) {
   const ex = s.export;
   return (
     <Section value="export" icon={<Rocket />} title="Xuất video"
       summary={`${PLATFORMS.find((p) => p.aspect === s.frame.aspect)?.hint ?? s.frame.aspect} · ${{ fast: "nhanh", balanced: "cân bằng", high: "chất lượng cao" }[ex.quality]}`}>
+      {qc && (
+        <div className="grid gap-1.5 rounded-xl border bg-muted/40 p-3" aria-label="Kiểm tra video đã xuất">
+          <p className="text-xs font-semibold text-muted-foreground">Kiểm tra bản đã xuất</p>
+          {qc.items.map((it) => (
+            <p key={it.title} className={cn("flex gap-2 text-sm", it.level === "warn" ? "text-fast-foreground" : "text-ok")}>
+              {it.level === "warn" ? <AlertTriangle className="mt-0.5 size-4 shrink-0" /> : <CheckCircle2 className="mt-0.5 size-4 shrink-0" />}
+              <span><span className="font-medium">{it.title}</span>{it.detail && <span className="block text-xs text-muted-foreground">{it.detail}</span>}</span>
+            </p>
+          ))}
+        </div>
+      )}
       <Field label="Đăng lên đâu (chọn khung hình)">
         <div className="grid gap-1.5">
           {PLATFORMS.map((p) => (

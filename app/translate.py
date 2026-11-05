@@ -16,7 +16,7 @@ CONTEXT = 6
 SYSTEM = """Bạn là biên dịch viên lồng tiếng video ngắn (Douyin/TikTok/Reels) từ {src} sang {dst}.
 Yêu cầu:
 - Dịch tự nhiên như người bản ngữ {dst} nói, đúng văn nói, giữ giọng điệu gốc.
-- Bản dịch sẽ được đọc lồng tiếng nên PHẢI NGẮN GỌN: không vượt quá max_chars ký tự của mỗi câu. Lược bớt từ thừa nếu cần, giữ ý chính.
+- Bản dịch sẽ được đọc lồng tiếng nên PHẢI NGẮN GỌN: không vượt quá max_chars ký tự của mỗi câu (secs là số giây câu được đọc). Hai cách diễn đạt đều đúng nghĩa thì chọn cách NGẮN hơn; lược bớt từ thừa, không độn chữ cho dài. Số và đơn vị viết theo cách đọc thành tiếng.
 - Đọc cả các câu xung quanh để hiểu ngữ cảnh, nhưng mỗi id dịch riêng, không gộp, không tách.
 - {names}
 - Không thêm chú thích, không thêm dấu ngoặc giải thích.
@@ -122,6 +122,7 @@ def _items(segs, duration, rate, rng, target="vi"):
     return [{
         "id": segs[i]["id"],
         "text": segs[i]["src"],
+        "secs": round(available_secs(segs, i, duration), 1),
         "max_chars": budget(available_secs(segs, i, duration), rate, target),
     } for i in rng]
 
@@ -129,7 +130,7 @@ def _items(segs, duration, rate, rng, target="vi"):
 def _openai(segs, duration, rate, src_lang, on_progress, script=None, target="vi"):
     from openai import OpenAI
 
-    client = OpenAI(api_key=openai_key(), max_retries=2, timeout=90)
+    client = OpenAI(api_key=openai_key(), max_retries=1, timeout=45)   # a dead connection must fall back to Google within a minute or two, not five
     info = lang_info(src_lang)
     dst = target_info(target)["name"]
     names = _names_rule(src_lang, target)
@@ -188,7 +189,7 @@ def _gtx(text: str, src: str, dst: str = "vi") -> str:
     q = urllib.parse.urlencode({"client": "gtx", "sl": src, "tl": dst, "dt": "t", "q": text})
     req = urllib.request.Request("https://translate.googleapis.com/translate_a/single?" + q,
                                  headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=20) as r:
+    with urllib.request.urlopen(req, timeout=10) as r:
         data = json.loads(r.read().decode("utf-8"))
     return "".join(part[0] for part in data[0] if part and part[0]).strip()
 
@@ -199,13 +200,19 @@ def _google(segs, idxs, src_lang, on_progress=None, target="vi"):
     src = lang_info(src_lang)["google"]
     dst = target_info(target)["google"]
 
+    fails = [0]   # in a row: when Google is unreachable, stop after a few tries instead of waiting for every line
+
     def one(i):
-        for attempt in range(3):
+        for attempt in range(2):
+            if fails[0] >= 6:
+                return
             try:
                 segs[i]["vi"] = _gtx(segs[i]["src"], src, dst)
+                fails[0] = 0
                 return
             except Exception:
-                time.sleep(1.5 * (attempt + 1))
+                fails[0] += 1
+                time.sleep(1.0 * (attempt + 1))
 
     # a few at a time: much faster than one by one, still gentle enough not to get blocked
     pool = ThreadPoolExecutor(max_workers=5)

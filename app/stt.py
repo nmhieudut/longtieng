@@ -15,7 +15,7 @@ import opencc
 import soundfile as sf
 
 from . import cancel
-from .config import lang_info
+from .config import lang_info, save_user_settings, user_settings
 
 _t2s = opencc.OpenCC("t2s")
 _PUNCT_ONLY = re.compile(r"^[\s\W_]*$", re.UNICODE)
@@ -38,8 +38,29 @@ def _repo() -> str:
     if engine() == "mlx":
         return os.getenv("WHISPER_MODEL", "").strip() or "mlx-community/whisper-large-v3-turbo"
     from faster_whisper.utils import _MODELS
-    name = os.getenv("FASTER_WHISPER_MODEL", "").strip() or "large-v3-turbo"
+    name = os.getenv("FASTER_WHISPER_MODEL", "").strip() or fw_name()
     return _MODELS.get(name, name)
+
+
+# CPU engine: from the most accurate to the fastest. Each step down is roughly 2.5-3x faster.
+FW_CHAIN = ["large-v3-turbo", "small", "base", "tiny"]
+FW_LABEL = {"large-v3-turbo": "Chuẩn (chính xác nhất)", "small": "Nhanh", "base": "Rất nhanh", "tiny": "Cực nhanh (kém chính xác)"}
+MAX_STT_MINUTES = 10   # the CPU engine may take this long per video before the app picks a smaller model by itself
+
+
+def fw_pref() -> str:
+    """The user's choice (Cài đặt): auto | one of FW_CHAIN."""
+    v = user_settings().get("stt_model", "auto")
+    return v if v in FW_CHAIN else "auto"
+
+
+def fw_name() -> str:
+    """Model the CPU engine uses now: the user's choice, else what this computer was measured to handle."""
+    pref = fw_pref()
+    if pref != "auto":
+        return pref
+    auto = user_settings().get("stt_auto")
+    return auto if auto in FW_CHAIN else "large-v3-turbo"
 
 
 def _probe_file() -> str:
@@ -93,7 +114,7 @@ def ensure_model(on_progress=None) -> None:
         done.set()
 
 
-def transcribe(audio: Path, lang: str, on_progress=None) -> tuple[list[dict], str]:
+def transcribe(audio: Path, lang: str, on_progress=None, on_note=None) -> tuple[list[dict], str]:
     # Pass samples, not a path: the engines would otherwise shell out to whatever `ffmpeg` is on PATH
     samples, sr = sf.read(str(audio), dtype="float32")
     assert sr == 16000, sr
@@ -102,7 +123,7 @@ def transcribe(audio: Path, lang: str, on_progress=None) -> tuple[list[dict], st
     if engine() == "mlx":
         raw, detected = _mlx(samples, language, prompt, on_progress)
     else:
-        raw, detected = _faster(samples, language, prompt, on_progress)
+        raw, detected = _faster(samples, language, prompt, on_progress, on_note)
     detected = detected or lang
     return clean_segments(raw, detected), detected
 
@@ -148,24 +169,62 @@ def _mlx(samples, language, prompt, on_progress):
 
 
 _fw_model = None
+_fw_loaded = ""
 _fw_lock = threading.Lock()
 
 
-def _faster(samples, language, prompt, on_progress):
-    global _fw_model
-    from faster_whisper import WhisperModel
+def _threads() -> int:
+    """Physical cores (up to 8): more threads than that only fight each other, and on hybrid CPUs the slow
+    cores drag the fast ones down."""
+    try:
+        import psutil
+        n = psutil.cpu_count(logical=False) or 0
+    except Exception:
+        n = 0
+    return max(2, min(8, n or (os.cpu_count() or 4) // 2))
 
+
+def _load_fw(name_repo: str):
+    from faster_whisper import WhisperModel
+    return WhisperModel(name_repo, device="cpu", compute_type="int8", cpu_threads=_threads())
+
+
+def _faster(samples, language, prompt, on_progress, on_note=None):
+    global _fw_model, _fw_loaded
+    total = len(samples) / 16000
     with _fw_lock:
-        if _fw_model is None:
-            _fw_model = WhisperModel(_repo(), device="cpu", compute_type="int8",
-                                     cpu_threads=max(1, (os.cpu_count() or 4) - 1))
+        if _fw_model is None or _fw_loaded != _repo():
+            _fw_model, _fw_loaded = _load_fw(_repo()), _repo()
+        # first time on this computer: time 20 s of audio, and when the whole video would take longer than
+        # MAX_STT_MINUTES with this model, go to a smaller one (and remember it)
+        if fw_pref() == "auto" and user_settings().get("stt_auto") is None and total > 60 and not os.getenv("FASTER_WHISPER_MODEL"):
+            for _s in _fw_model.transcribe(samples[: 16000 * 3], language=language, beam_size=1, vad_filter=True)[0]:
+                pass   # warm-up: the first call pays for one-time set-up and would look far slower than the real speed
+            t0 = time.time()
+            segs, _ = _fw_model.transcribe(samples[: 16000 * 20], language=language, beam_size=1, condition_on_previous_text=False,
+                                           vad_filter=True, initial_prompt=prompt)
+            for _s in segs:
+                pass
+            rtf = (time.time() - t0) / min(20.0, total)
+            name = fw_name()
+            k = FW_CHAIN.index(name)
+            while k < len(FW_CHAIN) - 1 and rtf * total / (2.7 ** (k - FW_CHAIN.index(name))) > MAX_STT_MINUTES * 60:
+                k += 1
+            print(f"[stt] {name}: {rtf:.2f}x thời gian thực; video {total:.0f}s -> dùng {FW_CHAIN[k]}", flush=True)
+            save_user_settings({"stt_auto": FW_CHAIN[k], "stt_rtf": round(rtf, 2)})
+            if FW_CHAIN[k] != name:
+                if on_note:
+                    on_note(f"Máy này nhận dạng hơi chậm (khoảng {rtf:.1f}× thời gian video), nên dùng model nhỏ hơn "
+                            f"({FW_CHAIN[k]}) cho nhanh. Đổi lại trong Cài đặt → Nhận dạng giọng nói.")
+                _ensure_for_switch(on_note)
+                _fw_model, _fw_loaded = _load_fw(_repo()), _repo()
     segments, info = _fw_model.transcribe(
         samples,
         language=language,
         beam_size=1,                        # greedy, like mlx-whisper; much faster on CPU
+        vad_filter=True,                    # skip music and silence: on a CPU that is most of the saved time
+        vad_parameters={"min_silence_duration_ms": 500},
         condition_on_previous_text=False,
-        word_timestamps=True,
-        hallucination_silence_threshold=2.0,
         no_speech_threshold=0.6,
         initial_prompt=prompt,
     )
@@ -178,6 +237,11 @@ def _faster(samples, language, prompt, on_progress):
         if on_progress:
             on_progress(min(1.0, seg.end / dur))
     return raw, info.language
+
+
+def _ensure_for_switch(on_note) -> None:
+    if not model_cached():
+        ensure_model(lambda f: on_note and on_note(f"Đang tải model nhận dạng nhỏ hơn… {int(f * 100)}%"))
 
 
 def clean_segments(raw: list[dict], lang: str) -> list[dict]:

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, type AppSettings, desktopApi } from "@/lib/api";
 
@@ -201,6 +202,27 @@ export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
             <p className="text-[11px] text-muted-foreground">
               Dùng VieNeu-TTS (Apache-2.0, pnnbao97/VieNeu-TTS). Âm thanh tạo ra được dùng cho video đăng công khai.
             </p>
+          </div>
+        )}
+
+        {info?.stt_cpu && (
+          <div className="grid gap-2 border-t pt-4">
+            <Label className="flex items-center gap-1.5"><Mic className="size-4" /> Tốc độ nhận dạng giọng nói</Label>
+            <Select value={info.stt_model}
+              onValueChange={async (v) => {
+                try { setInfo(await api.saveAppSettings({ stt_model: v })); toast.success("Đã lưu. Áp dụng từ video nhận dạng sau."); }
+                catch (e) { toast.error((e as Error).message); }
+              }}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">Tự chọn theo tốc độ máy{info.stt_used ? ` (đang dùng: ${info.stt_used})` : ""}</SelectItem>
+                <SelectItem value="large-v3-turbo">Chuẩn: chính xác nhất, chậm trên máy yếu</SelectItem>
+                <SelectItem value="small">Nhanh: nhanh khoảng 3 lần</SelectItem>
+                <SelectItem value="base">Rất nhanh: nhanh khoảng 8 lần</SelectItem>
+                <SelectItem value="tiny">Cực nhanh: kém chính xác</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Máy không có GPU Apple nhận dạng bằng CPU. Nếu video 5–10 phút mà mất cả tiếng, chọn “Nhanh” hoặc “Rất nhanh”. Model nhỏ hơn tải về một lần (vài chục đến vài trăm MB).</p>
           </div>
         )}
 

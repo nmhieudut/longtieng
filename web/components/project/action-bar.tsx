@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  AlertTriangle, ArrowLeft, CheckCircle2, Clapperboard, Download, FileJson, FileText, FolderOpen, Info, Loader2, MoreHorizontal,
+  AlertTriangle, ArrowLeft, CheckCircle2, Clapperboard, Download, FileJson, FileText, FolderOpen, History, Info, Loader2, MoreHorizontal,
   Play, RotateCcw, Subtitles, X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -11,6 +11,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { IconButton } from "@/components/ui/icon-button";
+import { VersionsDialog } from "./versions-dialog";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, desktopApi, fileUrl, fmt, isActive, type Project, STAGE_LABEL } from "@/lib/api";
@@ -30,6 +31,7 @@ type Props = {
   onCancel: () => Promise<void>;
   onJump: (segIndex: number) => void;   // show a problem line in the list
   onSaveToFolder: () => Promise<void>;
+  onRestore: (p: Project) => void;       // a saved version of the edit was restored
 };
 
 const ago = (t: number) => {
@@ -41,10 +43,11 @@ const ago = (t: number) => {
 };
 
 /** The one strip with everything you press: start, translate again, preview, export, download. Always on top. */
-export function ActionBar({ project: p, previewAt, onOpenDub, onPreview, onRender, onRetry, onCancel, onJump, onSaveToFolder }: Props) {
+export function ActionBar({ project: p, previewAt, onOpenDub, onPreview, onRender, onRetry, onCancel, onJump, onSaveToFolder, onRestore }: Props) {
   const [stopping, setStopping] = useState(false);
   const [folder, setFolder] = useState("");
   const [copying, setCopying] = useState(false);
+  const [history, setHistory] = useState(false);
   useEffect(() => {
     const load = () => { api.appSettings().then((i) => setFolder(i.output_dir)).catch(() => {}); };
     load();
@@ -176,6 +179,8 @@ export function ActionBar({ project: p, previewAt, onOpenDub, onPreview, onRende
             {saved?.path && bridge && (
               <DropdownMenuItem onSelect={() => bridge.reveal(saved.path!)}><FolderOpen /> Mở thư mục đã chép</DropdownMenuItem>
             )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => setHistory(true)}><History /> Lịch sử phiên bản</DropdownMenuItem>
             {!p.outputs.srt && !p.outputs.txt && !p.outputs.json && !(final && folder) && (
               <DropdownMenuItem disabled>Chưa có gì để tải</DropdownMenuItem>
             )}
@@ -208,6 +213,7 @@ export function ActionBar({ project: p, previewAt, onOpenDub, onPreview, onRende
           <FolderOpen className="size-3 shrink-0 text-primary" /><span className="min-w-0 truncate">Đã chép vào {saved.path}</span>
         </p>
       )}
+      <VersionsDialog open={history} onOpenChange={setHistory} projectId={p.id} onRestore={onRestore} />
     </header>
   );
 }

@@ -1,6 +1,7 @@
 """Subtitles (SRT/ASS) and final ffmpeg render."""
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -34,15 +35,76 @@ def _sub_times(segs, i, duration):
     return s["start"], max(s["start"] + 0.3, min(end, nxt)) if nxt > s["start"] else end
 
 
+_BREAK = re.compile(r"(?<=[.,;:!?…，。！？；：、])\s*")
+
+
+def _is_cjk(ch: str) -> bool:
+    return "\u2e80" <= ch <= "\u9fff" or "\uac00" <= ch <= "\ud7af" or "\u3040" <= ch <= "\u30ff"
+
+
+def _chunks(text: str, cap: int) -> list[str]:
+    """Pieces of at most `cap` characters, cut at a space when there is one near the end."""
+    out = []
+    while len(text) > cap:
+        cut = text.rfind(" ", cap // 2, cap + 1)
+        cut = cut if cut > 0 else cap
+        out.append(text[:cut].strip())
+        text = text[cut:].strip()
+    if text:
+        out.append(text)
+    return out
+
+
+def split_cues(text: str, a: float, b: float, per_line: int, max_lines: int = 2,
+               max_dur: float = 7.0, min_dur: float = 0.8) -> list[tuple[str, float, float]]:
+    """One long line on screen for a long time is hard to read: cut it into cues of at most `max_lines` lines
+    and `max_dur` seconds, at punctuation where possible. The time is shared out by length."""
+    text = text.strip()
+    cap = max(6, per_line * max_lines)
+    if len(text) <= cap and b - a <= max_dur:
+        return [(text, a, b)]
+    pieces: list[str] = []
+    for part in (p for p in _BREAK.split(text) if p.strip()):
+        pieces += _chunks(part, cap)
+    cues: list[str] = []
+    for p in pieces:
+        if cues and len(cues[-1]) + 1 + len(p) <= cap:
+            sep = "" if _is_cjk(cues[-1][-1]) or _is_cjk(p[0]) else " "
+            cues[-1] += sep + p
+        else:
+            cues.append(p)
+    need = int((b - a) / max_dur + 0.999)
+    if len(cues) < need and len(text) >= need * 4:   # long in time but not in letters: still cut it, so no cue stays > max_dur
+        cues = _chunks(text, -(-len(text) // need)) if " " in text else [text[k:k + -(-len(text) // need)] for k in range(0, len(text), -(-len(text) // need))]
+    if len(cues) <= 1:
+        return [(text, a, b)]
+    # a cue that would be too short joins its neighbour
+    total = sum(len(c) for c in cues)
+    merged: list[str] = []
+    for c in cues:
+        if merged and (b - a) * len(merged[-1]) / total < min_dur:
+            sep = "" if _is_cjk(merged[-1][-1]) or _is_cjk(c[0]) else " "
+            merged[-1] += sep + c
+        else:
+            merged.append(c)
+    out, t = [], a
+    for k, c in enumerate(merged):
+        end = b if k == len(merged) - 1 else t + (b - a) * len(c) / total
+        out.append((c, round(t, 3), round(end, 3)))
+        t = end
+    return out
+
+
 def write_srt(segs, duration, path: Path) -> None:
     lines = []
     n = 0
     for i, s in enumerate(segs):
         if not s["vi"].strip():
             continue
-        n += 1
         a, b = _sub_times(segs, i, duration)
-        lines += [str(n), f"{_ts_srt(a)} --> {_ts_srt(b)}", s["vi"].strip(), ""]
+        for text, ca, cb in split_cues(s["vi"], a, b, 42):
+            n += 1
+            lines += [str(n), f"{_ts_srt(ca)} --> {_ts_srt(cb)}", text, ""]
     path.write_text("\n".join(lines), "utf-8")
 
 
@@ -164,6 +226,7 @@ def write_ass(segs, duration, media, st, path: Path, offset: float = 0.0, window
               f"100,100,0,0,{sty['border']},{edge_w},{shadow},2,{side},{side},{margin},1"]
     cjk = target_info(st["target"])["cjk"]
     per_line = max(6, int((W - 2 * side - 2 * edge_w) / (size * 1.08)))
+    cue_chars = max(12, int((W - 2 * side) / (size * 0.52)))   # letters per line for scripts with spaces
 
     def line_text(raw: str) -> str:
         t = _clean(raw)
@@ -197,14 +260,14 @@ def write_ass(segs, duration, media, st, path: Path, offset: float = 0.0, window
             rows.append(f"Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{line_text(best['vi'])}")
     elif subs:
         for i, s in enumerate(segs):
-            text = line_text(s["vi"])
-            if not text:
+            if not _clean(s["vi"]):
                 continue
-            a, b = _sub_times(segs, i, duration)
-            a, b = a - offset, b - offset
-            if b <= 0 or (window is not None and a >= window):
-                continue
-            rows.append(f"Dialogue: 0,{_ts_ass(max(0, a))},{_ts_ass(b)},Default,,0,0,0,,{text}")
+            a0, b0 = _sub_times(segs, i, duration)
+            for cue, ca, cb in split_cues(_clean(s["vi"]), a0, b0, per_line if cjk else cue_chars):
+                a, b = ca - offset, cb - offset
+                if b <= 0 or (window is not None and a >= window):
+                    continue
+                rows.append(f"Dialogue: 0,{_ts_ass(max(0, a))},{_ts_ass(b)},Default,,0,0,0,,{line_text(cue)}")
     path.write_text(_ass_head(W, H, styles) + "\n".join(rows) + "\n", "utf-8")
 
 
@@ -249,10 +312,31 @@ def color_filter(c: dict, v_in: str, v_out: str) -> str:
     return f"{v_in}{','.join(parts)}{v_out}"
 
 
+_FILTERS: dict[str, bool] = {}
+
+
+def has_filter(name: str) -> bool:
+    if not _FILTERS:
+        try:
+            out = cancel.run([FFMPEG, "-hide_banner", "-filters"], timeout=20).stdout
+        except Exception:
+            out = ""
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) > 1:
+                _FILTERS[parts[1]] = True
+        _FILTERS.setdefault("_loaded", True)
+    return name in _FILTERS
+
+
 def video_chain(proj: dict, ass: Path | None, cwd: Path, logo_in: str | None) -> tuple[list[str], str]:
     """Mask the original subtitles -> reframe -> burn subtitles/watermark -> logo. Returns (filters, label)."""
     st, media = proj["settings"], proj["media"]
     chain, v = [], "[0:v]"
+    if media.get("hdr") and has_filter("zscale") and has_filter("tonemap"):   # HDR phone video -> normal colours
+        chain.append("[0:v]zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,"
+                     "zscale=t=bt709:m=bt709:r=tv,format=yuv420p[vt]")
+        v = "[vt]"
     if st["mask"]["enabled"]:
         chain.append(mask_filter(st["mask"], v, "[vm]"))
         v = "[vm]"

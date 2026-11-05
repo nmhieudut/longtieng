@@ -39,6 +39,8 @@ export type Settings = {
   script: { mode: "translate" | "review"; style: string };
 };
 
+export type Version = { id: string; at: number; label: string; clips: number; overlays: number };
+
 export type Logo = { id: string; name: string; file: string };
 
 /** Text or picture laid over the exported video; times are seconds of the EDITED video. */
@@ -92,6 +94,7 @@ export type Project = {
   extra_sources?: ExtraSource[];
   timeline?: { clips: Clip[] };  // missing = the whole video, uncut
   film?: { n: number; w: number; h: number; duration: number; file: string };  // thumbnail strip for the timeline
+  qc?: { at: number; items: { level: "ok" | "warn"; title: string; detail: string }[] };   // checks of the last export
   translated_to?: string; // language the lines are in now (missing = Vietnamese, from before this existed)
   outputs: Partial<Record<"preview" | "final" | "srt" | "json" | "txt", Output>> & { saved?: SavedCopy };
   busy: boolean;
@@ -136,6 +139,9 @@ export type AppSettings = {
   openai_key_hint: string;
   stt_engine: string;
   stt_model_ready: boolean;
+  stt_cpu: boolean;                                   // recognition runs on the CPU (Windows / Intel): its speed depends on the model
+  stt_model: string;                                  // auto | large-v3-turbo | small | base | tiny
+  stt_used: string | null;
   data_dir: string;
   output_dir: string;
   output_suggestions: { label: string; path: string }[];
@@ -184,7 +190,7 @@ const P = (id: string) => `/api/projects/${id}`;
 export const api = {
   config: () => req<Config>("/api/config"),
   appSettings: () => req<AppSettings>("/api/app-settings"),
-  saveAppSettings: (patch: { openai_key?: string; output_dir?: string }) =>
+  saveAppSettings: (patch: { openai_key?: string; output_dir?: string; stt_model?: string }) =>
     req<AppSettings>("/api/app-settings", { method: "PUT", body: patch }),
   vieneuDownload: () => req<AppSettings["vieneu"]>("/api/vieneu/download", { method: "POST" }),
   updateState: (force = false) => req<UpdateState>(`/api/update${force ? "?force=1" : ""}`),
@@ -199,6 +205,11 @@ export const api = {
     req<Project>(`${P(id)}/overlays`, { method: "PUT", body: { overlays } }),
   saveTimeline: (id: string, clips: Clip[] | null) =>
     req<Project>(`${P(id)}/timeline`, { method: "PUT", body: { clips } }),
+  trimSilence: (id: string, body: { src: number; start: number; end: number; profile: string }) =>
+    req<{ keep: [number, number][]; removed: number; total: number }>(`${P(id)}/trim-silence`, { method: "POST", body }),
+  versions: (id: string) => req<Version[]>(`${P(id)}/versions`),
+  makeVersion: (id: string, label: string) => req<Version[]>(`${P(id)}/versions`, { method: "POST", body: { label } }),
+  restoreVersion: (id: string, vid: string) => req<Project>(`${P(id)}/versions/${vid}/restore`, { method: "POST" }),
   filmstrip: (id: string, src = 0) => req<Project>(`${P(id)}/filmstrip?src=${src}`, { method: "POST" }),
   retrySource: (id: string, src: number) => req<Project>(`${P(id)}/sources/${src}/retry`, { method: "POST" }),
   deleteSource: (id: string, src: number) => req<Project>(`${P(id)}/sources/${src}`, { method: "DELETE" }),

@@ -1,11 +1,12 @@
 """Background jobs. One heavy job at a time: Whisper/demucs twice on 16GB would swap."""
 
+import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 
-from . import cancel, dub, ocr, outdir, render, store, stt, timeline, translate, vieneu_tts
+from . import cancel, dub, ocr, outdir, qc, render, store, stt, timeline, translate, versions, vieneu_tts
 from .cancel import Cancelled
 from .config import MAX_DURATION_MIN
 from .media import MediaError, download_url, extract_audio_16k, probe
@@ -23,6 +24,19 @@ def step(pid: str, stage: str, progress: float | None = None, message: str = "")
     """Report progress — and stop here if the user pressed Huỷ."""
     cancel.check(pid)
     store.set_status(pid, stage, progress, message)
+
+
+def _eta(t0: float, x: float) -> str:
+    """" · còn khoảng 1 phút 20 giây" from how long the first x of the work took (only once it means something)."""
+    spent = time.time() - t0
+    if x < 0.05 or spent < 8:
+        return ""
+    left = int(spent * (1 - x) / x)
+    return f" · còn khoảng {left // 60} phút {left % 60:02d} giây" if left >= 60 else f" · còn khoảng {max(5, left // 5 * 5)} giây"
+
+
+def _dur(s: float) -> str:
+    return f"{int(s) // 60} phút {int(s) % 60:02d} giây" if s >= 60 else f"{s:.0f} giây"
 
 
 def request_cancel(pid: str) -> None:
@@ -98,18 +112,21 @@ def _prepare(pid: str):
         step(pid, "model", None, msg)
         stt.ensure_model(lambda f: step(pid, "model", f, msg))
 
-    step(pid, "transcribing", 0, "Đang nhận dạng giọng nói…")
+    t_stt = time.time()
+    step(pid, "transcribing", 0, "Đang nạp model nhận dạng giọng nói (lần đầu trong phiên hơi lâu)…")
     last = [0.0]
 
     def prog(x):
         cancel.check(pid)  # called from Whisper's progress hook, so this interrupts transcription
         if x - last[0] >= 0.02 or x >= 1:
             last[0] = x
-            step(pid, "transcribing", x, "Đang nhận dạng giọng nói…")
+            step(pid, "transcribing", x, f"Đang nhận dạng giọng nói…{_eta(t_stt, x)}")
 
-    segs, lang = stt.transcribe(d / "audio16k.wav", p["settings"]["lang"], prog)
+    segs, lang = stt.transcribe(d / "audio16k.wav", p["settings"]["lang"], prog,
+                                lambda m: step(pid, "transcribing", 0, m))
     if not segs:
         raise MediaError("Không nhận dạng được câu thoại nào trong video.")
+    t_stt = time.time() - t_stt
 
     # Looking for burned-in subtitles (local, CPU/GPU) and translating (network) don't need each
     # other, so do both at once.
@@ -121,14 +138,22 @@ def _prepare(pid: str):
         finder = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr")
         found_future = finder.submit(find)
 
+    t_tr = time.time()
     step(pid, "translating", 0, f"Đang dịch {len(segs)} câu…")
     try:
         warnings = translate.translate_all(
             segs, media["duration"], lang, p["settings"]["rate"],
-            lambda x: step(pid, "translating", x, f"Đang dịch {len(segs)} câu…"),
+            lambda x: step(pid, "translating", x, f"Đang dịch {len(segs)} câu…{_eta(t_tr, x)}"),
             script=p["settings"].get("script"), target=p["settings"]["target"])
+        t_tr = time.time() - t_tr
         if finder:
-            apply_mask_detection(pid, found_future.result())
+            # translating is done: do not look stuck at 100% while the subtitle search finishes (it is optional, so
+            # it gets a limited time)
+            step(pid, "detecting", None, "Đang dò phụ đề có sẵn trong video…")
+            try:
+                apply_mask_detection(pid, found_future.result(timeout=90))
+            except FutureTimeout:
+                warnings.append("Dò phụ đề gốc quá lâu nên đã bỏ qua. Bấm “Dò tự động” trong mục Phụ đề nếu cần.")
     finally:
         if finder:
             finder.shutdown(wait=False)
@@ -142,7 +167,8 @@ def _prepare(pid: str):
         q["detected_lang"] = lang
         q["warnings"] = warnings
         q["status"] = {"stage": "review", "progress": None,
-                       "message": "Xong. Kiểm tra bản dịch rồi bấm Lồng tiếng.", "error": None}
+                       "message": f"Xong (nhận dạng {_dur(t_stt)}, dịch {_dur(t_tr)}). Kiểm tra bản dịch rồi bấm Lồng tiếng.", "error": None}
+    print(f"[prepare {pid}] nhận dạng {t_stt:.1f}s, dịch {t_tr:.1f}s, {len(segs)} câu, video {media['duration']:.0f}s, engine {stt.engine()}", flush=True)
     store.update(pid, fin)
     if store.load(pid).get("auto_render"):  # batch: go straight on to the export
         _render(pid, None)
@@ -407,6 +433,19 @@ def _render(pid: str, preview_start: float | None):
     store.update(pid, fin)
     if not preview:
         deliver(pid)
+        try:
+            versions.snapshot(pid, "Sau khi xuất")
+        except Exception:
+            traceback.print_exc()
+        threading.Thread(target=_qc, args=(pid, out), daemon=True).start()   # a few seconds more; the export is already done
+
+
+def _qc(pid: str, path) -> None:
+    res = qc.check(path)
+    try:
+        store.update(pid, lambda q: q.__setitem__("qc", res))
+    except Exception:
+        traceback.print_exc()
 
 
 def deliver(pid: str) -> dict:

@@ -17,6 +17,7 @@ from .config import (
 from . import cancel
 from .media import decode_mono, trim_silence
 
+OVERLAP_TOL = 0.12   # seconds a line may run past its slot (the next line starts under its tail); the tail is faded
 _edge_sem = threading.Semaphore(4)  # edge-tts is an unofficial endpoint; be gentle
 
 
@@ -36,7 +37,7 @@ def classify(speech_secs: float, slot_secs: float, speed: float = 1.0) -> dict:
 
     speech_secs: length at the user's chosen rate (before per-line speed-up).
     """
-    need = speech_secs / slot_secs if slot_secs > 0 else 99
+    need = speech_secs / (slot_secs + OVERLAP_TOL) if slot_secs > 0 else 99   # a line may run a hair into the next one
     max_speed = MAX_EDGE_SPEEDUP * MAX_ATEMPO
     if need <= 1.02:
         status = "ok"
@@ -206,14 +207,14 @@ def make_line(proj_dir: Path, seg: dict, slot_secs: float, voice: str, rate: flo
         audio = trim_silence(decode_mono(raw))
         speed = edge_speed
         # 2) still long: time-stretch the remainder
-        over = (audio.size / SAMPLE_RATE) / slot_secs
+        over = (audio.size / SAMPLE_RATE) / (slot_secs + OVERLAP_TOL)
         if over > 1.02:
             tempo = min(MAX_ATEMPO, over * 1.02)
             audio = trim_silence(decode_mono(raw, atempo=tempo))
             speed *= tempo
         fit = classify(base_secs, slot_secs, speed)
         # mix() cuts whatever still runs past the slot, so that is an overflow whatever the ratio says
-        if audio.size / SAMPLE_RATE > slot_secs * 1.02:
+        if audio.size / SAMPLE_RATE > (slot_secs + OVERLAP_TOL) * 1.02:
             fit["status"] = "overflow"
 
     for old in (proj_dir / "tts").glob(f"{seg['id']}_v*.wav"):
@@ -250,7 +251,7 @@ def mix(proj_dir: Path, segs: list[dict], duration: float, out: Path) -> None:
         if not s.get("tts"):
             continue
         clip, _ = sf.read(proj_dir / s["tts"]["file"], dtype="float32")
-        limit = int(slot(segs, i, duration) * SAMPLE_RATE)
+        limit = int((slot(segs, i, duration) + OVERLAP_TOL) * SAMPLE_RATE)
         if clip.size > limit:  # overflow policy: cut at next line, short fade
             clip = clip[:limit].copy()
             f = min(fade, clip.size)

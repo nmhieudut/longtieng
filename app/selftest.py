@@ -305,6 +305,23 @@ def _pipeline(clip: Path) -> str:
             from app import render as _render_mod
             if _render_mod.mean_volume_db(out2) < -50:
                 raise RuntimeError("chỉ chỉnh sửa: mất tiếng gốc")
+            # cut the silences, the saved versions, and the quality check of the export
+            r = c.post(f"/api/projects/{eid}/trim-silence", json={"src": 0, "start": 0, "end": D2, "profile": "tight"})
+            r.raise_for_status()
+            tr = r.json()
+            if not tr["keep"] or tr["removed"] < 0 or any(b - a_ < 0.2 for a_, b in tr["keep"]):
+                raise RuntimeError(f"cắt khoảng lặng: kết quả lạ {tr}")
+            vs = c.get(f"/api/projects/{eid}/versions").json()
+            if not vs or vs[0]["label"] != "Sau khi xuất":
+                raise RuntimeError(f"không có phiên bản lưu sau khi xuất: {vs}")
+            for _ in range(60):
+                q = c.get(f"/api/projects/{eid}").json().get("qc")
+                if q:
+                    break
+                time.sleep(1)
+            if not q or not q["items"]:
+                raise RuntimeError("không có kết quả kiểm tra video xuất")
+            print(f"       qc: {[i['title'] for i in q['items']]}; cắt lặng bỏ {tr['removed']}s/{tr['total']}s", flush=True)
             return f"final.mp4 {size_vi} KB, tiếng Nhật {ja_kb} KB, timeline {got:.1f}s, ghép 3 video {got2:.1f}s, chỉ chỉnh sửa {got3:.1f}s"
     finally:
         server.should_exit = True
