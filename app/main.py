@@ -22,6 +22,8 @@ ACTIVE = {"queued", "downloading", "extracting", "model", "transcribing", "detec
           "dubbing", "separating", "rendering"}
 RENDER_STAGES = {"dubbing", "separating", "rendering"}
 VIDEO_EXT = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}   # photos can be put on the timeline as clips
+IMAGE_SECONDS, MAX_IMAGE_SECONDS = 5.0, 120.0
 ENUMS = {
     "lang": set(SOURCE_LANGS),
     "target": set(TARGET_LANGS),
@@ -775,7 +777,7 @@ def make_filmstrip(pid: str, src: int = 0):
     source = d / rel
     with tempfile.TemporaryDirectory(dir=d) as tmp:
         def grab(i):
-            t = (i + 0.5) * m["duration"] / FILM_FRAMES
+            t = 0 if m.get("kind") == "image" else (i + 0.5) * m["duration"] / FILM_FRAMES   # a photo has one frame
             f = Path(tmp) / f"{i:03d}.jpg"
             return media.run([FFMPEG, "-y", "-v", "error", "-ss", f"{t:.2f}", "-i", str(source), "-frames:v", "1",
                               "-vf", f"scale={w}:{FILM_H}", "-q:v", "5", str(f)], timeout=60)
@@ -806,7 +808,7 @@ MAX_EXTRA_SOURCES = 16
 def _add_clip(p: dict, entry: dict, index: int = -1) -> list[dict]:
     """The project's clips with the whole new video put at `index` (default: the end). ValueError if that makes it too long."""
     clips = timeline.clips_of(p) or [{"id": "full", "start": 0, "end": p["media"]["duration"]}]
-    new = {"id": f"s{entry['id']}", "src": entry["id"], "start": 0, "end": entry["duration"]}
+    new = {"id": f"s{entry['id']}", "src": entry["id"], "start": 0, "end": entry.get("default_len") or entry["duration"]}
     at = len(clips) if index < 0 else min(index, len(clips))
     clips = clips[:at] + [new] + clips[at:]
     durs = timeline.source_durations(p) | {entry["id"]: entry["duration"]}
@@ -823,8 +825,11 @@ def add_source(pid: str, file: UploadFile = File(...), as_layer: bool = Form(Fal
     if not p.get("media"):
         raise HTTPException(400, "Video chính chưa sẵn sàng.")
     ext = Path(file.filename or "").suffix.lower()
-    if ext not in VIDEO_EXT:
-        raise HTTPException(400, f"Định dạng {ext or '?'} không hỗ trợ. Dùng mp4, mov, webm, mkv.")
+    image = ext in IMAGE_EXT
+    if ext not in VIDEO_EXT and not image:
+        raise HTTPException(400, f"Định dạng {ext or '?'} không hỗ trợ. Dùng mp4, mov, webm, mkv, hoặc ảnh jpg, png, webp.")
+    if image and as_layer:
+        raise HTTPException(400, "Ảnh chèn vào timeline như một đoạn; muốn đặt ảnh lên trên video thì dùng Hình dán.")
     extras = timeline.extra_sources(p)
     if len(extras) >= MAX_EXTRA_SOURCES:
         raise HTTPException(400, f"Tối đa {MAX_EXTRA_SOURCES} video thêm vào một dự án.")
@@ -843,10 +848,12 @@ def add_source(pid: str, file: UploadFile = File(...), as_layer: bool = Form(Fal
                     raise HTTPException(413, f"File lớn hơn {MAX_UPLOAD_MB}MB.")
                 f.write(chunk)
         info = media.probe(dst)
-        if info["duration"] > MAX_DURATION_MIN * 60:
+        if not image and info["duration"] > MAX_DURATION_MIN * 60:
             raise HTTPException(400, f"Video dài {info['duration'] / 60:.1f} phút, vượt giới hạn {MAX_DURATION_MIN:g} phút.")
         entry = {"id": n, "file": dst.name, "name": Path(file.filename or "video").stem[:80], "duration": info["duration"],
                  "width": info["width"], "height": info["height"], "has_audio": info["has_audio"]}
+        if image:   # a photo has no length of its own: it can be stretched up to MAX_IMAGE_SECONDS, and starts at IMAGE_SECONDS
+            entry |= {"kind": "image", "duration": MAX_IMAGE_SECONDS, "default_len": IMAGE_SECONDS, "has_audio": False}
         # (checked again below on the timeline as it is when the upload has finished: it stays editable meanwhile)
         if not as_layer:
             _add_clip(p, entry, index)
@@ -876,8 +883,8 @@ def add_source(pid: str, file: UploadFile = File(...), as_layer: bool = Form(Fal
     except ValueError as e:
         dst.unlink(missing_ok=True)
         raise HTTPException(400, str(e))
-    if as_layer or p["status"]["stage"] == "new" and not p["segments"]:
-        return _view(store.load(pid))   # a layer, or editing only so far: nothing to recognise or translate
+    if as_layer or image or p["status"]["stage"] == "new" and not p["segments"]:
+        return _view(store.load(pid))   # a layer, a photo, or editing only so far: nothing to recognise or translate
     store.set_status(pid, "extracting", None, "Đang chuẩn bị video mới…")  # so the page starts following the job
     try:
         jobs.submit_extra(pid, n)

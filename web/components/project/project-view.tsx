@@ -25,7 +25,7 @@ import { TimelinePanel, type TimelineHandle } from "./timeline-panel";
 import { useClipPlayback } from "./use-clip-playback";
 import { newEditLog } from "./edit-log";
 import { useOverlays } from "./use-overlays";
-import { locate, mapLines, totalLen } from "@/lib/timeline";
+import { type Clip, type Crop, isGap, locate, mapLines, srcOf, totalLen } from "@/lib/timeline";
 import { useTimeline } from "./use-timeline";
 import { VideoPanel, type VideoView } from "./video-panel";
 
@@ -129,7 +129,12 @@ export function ProjectView({ id }: { id: string }) {
     setPlaySrc(srcId);
     setTime(t);
   }, []);
+  // a clip with no video to play: a blank part, or a photo (shown as a picture, with its own clock)
+  const imageIds = useMemo(() => new Set((p?.extra_sources ?? []).filter((e) => e.kind === "image").map((e) => e.id)), [p?.extra_sources]);
+  const still = useCallback((c: Clip) => isGap(c) || imageIds.has(srcOf(c)), [imageIds]);
+  const [cropMode, setCropMode] = useState(false);
   const clipPlay = useClipPlayback({
+    still,
     videoRef, clips: tl.clips, loaded: loadedSrc, active: view === "source" && tl.edited, playing, time, volume, muted,
     onJump: jump, onSwitch: switchTo,
   });
@@ -263,6 +268,9 @@ export function ProjectView({ id }: { id: string }) {
   const fresh = p.status.stage === "new" && p.segments.length === 0;
   const tab = tabSel ?? (fresh ? "media" : "dub");
   const locked = busy && RENDER_STAGES.includes(p.status.stage);
+  const curClip = tl.clips[clipPlay.idx];
+  const imgInfo = curClip ? p.extra_sources?.find((e) => e.id === srcOf(curClip) && e.kind === "image") : undefined;
+  const imgFile = imgInfo?.file;
   const dubView = dubSel ?? (p.segments.length ? "lines" : "config");
   const sectionTab = (SECTION_IDS as readonly string[]).includes(tab) ? (tab as SectionId) : null;
   const flushAll = async () => {
@@ -349,6 +357,11 @@ export function ProjectView({ id }: { id: string }) {
               edited={tl.edited}
               playing={playingNow}
               gap={view === "source" && clipPlay.inGap}
+              stillImage={view === "source" && clipPlay.inGap && imgFile ? fileUrl(p.id, imgFile) : null}
+              stillDims={imgInfo ? { w: imgInfo.width, h: imgInfo.height } : null}
+              fx={curClip ? { crop: curClip.crop, rotate: curClip.rotate, flip: curClip.flip } : null}
+              cropMode={cropMode && (!clipPlay.inGap || !!imgFile) && !locked}
+              onCrop={(c: Crop | null) => tl.tweak(tl.clips.map((x, i) => (i === clipPlay.idx ? (c ? { ...x, crop: c } : { ...x, crop: undefined }) : x)), `crop${clipPlay.idx}`)}
               volume={volume}
               muted={muted}
               onVolume={setVolume}
@@ -400,6 +413,8 @@ export function ProjectView({ id }: { id: string }) {
                 onTogglePlay={togglePlay}
                 onApply={apply}
                 handle={tlRef}
+                cropMode={cropMode}
+                onCropMode={setCropMode}
                 selOv={selOv}
                 setSelOv={setSelOv}
                 inspectorHost={inspectorHost}

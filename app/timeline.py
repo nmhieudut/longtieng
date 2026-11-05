@@ -29,7 +29,9 @@ MAX_VOLUME = 2.0
 MAX_FADE = 2.0
 GAP = -1         # `src` of a blank clip: black picture, silence ("khoảng trống" between two clips)
 MAX_GAP = 60.0
-PROP_DEFAULTS = {"src": 0, "speed": 1.0, "volume": 1.0, "fade_in": 0.0, "fade_out": 0.0, "transition": 0.0}
+MIN_CROP = 0.1   # smallest crop side, as a fraction of the picture
+PROP_DEFAULTS = {"src": 0, "speed": 1.0, "volume": 1.0, "fade_in": 0.0, "fade_out": 0.0, "transition": 0.0,
+                 "crop": None, "rotate": 0, "flip": False}
 
 
 def speed(c: dict) -> float:
@@ -43,6 +45,25 @@ def clip_len(c: dict) -> float:
 
 def is_gap(c: dict) -> bool:
     return c.get("src", 0) == GAP
+
+
+def transformed(c: dict) -> bool:
+    """The picture of this clip is cropped, turned or mirrored (so it no longer has the video's own size)."""
+    return bool(c.get("crop")) or bool(c.get("rotate")) or bool(c.get("flip"))
+
+
+def _clean_crop(raw) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        x, y, w, h = (float(raw[k]) for k in ("x", "y", "w", "h"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    w, h = min(1.0, max(MIN_CROP, w)), min(1.0, max(MIN_CROP, h))
+    x, y = min(1.0 - w, max(0.0, x)), min(1.0 - h, max(0.0, y))
+    if w > 0.995 and h > 0.995:   # the whole picture: not a crop
+        return None
+    return {"x": round(x, 4), "y": round(y, 4), "w": round(w, 4), "h": round(h, 4)}
 
 
 def plain(c: dict) -> bool:
@@ -94,8 +115,16 @@ def validate(raw, duration: float, durations: dict[int, float] | None = None, ma
             cid = secrets.token_hex(3)
         seen.add(cid)
         length = (b - a) / spd
-        out.append({"id": cid, "src": src, "start": a, "end": b, "speed": spd, "volume": vol,
-                    "fade_in": min(fi, length / 2), "fade_out": min(fo, length / 2), "transition": tr})
+        item = {"id": cid, "src": src, "start": a, "end": b, "speed": spd, "volume": vol,
+                "fade_in": min(fi, length / 2), "fade_out": min(fo, length / 2), "transition": tr}
+        crop = _clean_crop(c.get("crop"))
+        if crop:
+            item["crop"] = crop
+        if int(c.get("rotate") or 0) % 360 in (90, 180, 270):
+            item["rotate"] = int(c["rotate"]) % 360
+        if c.get("flip"):
+            item["flip"] = True
+        out.append(item)
     if max_total is not None and out_duration(out) > max_total:
         raise ValueError(f"Video sau khi chỉnh dài {out_duration(out) / 60:.1f} phút, vượt giới hạn {max_total / 60:g} phút.")
     return out
@@ -244,25 +273,35 @@ def build_edit(proj_dir: Path, p: dict, clips: list[dict], on_progress=None) -> 
     cmd = [FFMPEG, "-y", "-v", "error", "-progress", "pipe:1", "-nostats"]
     # one input per clip: with a single input ffmpeg must keep decoded frames of the clips concat is not reading yet
     W, H = int(p["media"]["width"]) // 2 * 2, int(p["media"]["height"]) // 2 * 2
+    extras = {e["id"]: e for e in extra_sources(p)}
     for c in clips:
         if is_gap(c):
             cmd += ["-f", "lavfi", "-t", f"{c['end']:.3f}", "-i", f"color=c=black:s={W}x{H}:r=30"]
+        elif extras.get(c.get("src", 0), {}).get("kind") == "image":   # a photo: shown for as long as the clip lasts
+            cmd += ["-loop", "1", "-framerate", "30", "-t", f"{c['end'] - c['start']:.3f}", "-i", str(source_path(proj_dir, p, c["src"]))]
         else:
             cmd += ["-ss", f"{c['start']:.3f}", "-t", f"{c['end'] - c['start']:.3f}", "-i",
                     str(source_path(proj_dir, p, c.get("src", 0)))]
     n = len(clips)
     # another video can have another size, frame rate, no sound: bring every clip to the main video's format
     crossfades = any(trans(clips, i) > 0 for i in range(n))
-    mixed = any(c.get("src", 0) != 0 for c in clips) or crossfades  # xfade needs identical size, fps and sound format
+    mixed = any(c.get("src", 0) != 0 for c in clips) or crossfades or any(transformed(c) for c in clips)  # xfade needs identical size, fps and sound format
     fps = _fps(proj_dir / p["source"]["file"]) if mixed else 30.0
-    extras = {e["id"]: e for e in extra_sources(p)}
     chains, ins = [], n  # `ins` = next free input index (silence for videos without sound goes after the clips)
     for i, c in enumerate(clips):
         L, k = clip_len(c), speed(c)
         vf = []
+        cr = c.get("crop")
+        if cr:   # the crop is picked on the picture as it is in the file; what is left is then turned and fills the frame
+            vf.append(f"crop=iw*{cr['w']:.4f}:ih*{cr['h']:.4f}:iw*{cr['x']:.4f}:ih*{cr['y']:.4f}")
+        if c.get("rotate"):
+            vf += {90: ["transpose=1"], 180: ["hflip", "vflip"], 270: ["transpose=2"]}[int(c["rotate"])]
+        if c.get("flip"):
+            vf.append("hflip")
         if mixed:
-            vf += [f"scale={W}:{H}:force_original_aspect_ratio=decrease", f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2",
-                   "setsar=1", f"fps={fps:.3f}", "format=yuv420p"]
+            fit = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}" if cr
+                   else f"scale={W}:{H}:force_original_aspect_ratio=decrease")
+            vf += [fit] + ([] if cr else [f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2"]) + ["setsar=1", f"fps={fps:.3f}", "format=yuv420p"]
         vf.append("setpts=(PTS-STARTPTS)" + (f"/{k:.4f}" if k != 1 else ""))
         if c.get("fade_in"):
             vf.append(f"fade=t=in:st=0:d={c['fade_in']:.2f}")

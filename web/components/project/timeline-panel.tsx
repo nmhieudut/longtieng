@@ -1,6 +1,6 @@
 "use client";
 
-import { AudioLines, Copy, Gauge, Layers, SquareDashed, HelpCircle, ImagePlus, Loader2, Redo2, RotateCcw, Scissors, Trash2, Type, Undo2, Video, Volume2, ZoomIn } from "lucide-react";
+import { AudioLines, Copy, Crop as CropIcon, FlipHorizontal, Gauge, Layers, SquareDashed, HelpCircle, ImagePlus, Loader2, Redo2, RotateCcw, RotateCw, Scissors, Trash2, Type, Undo2, Video, Volume2, ZoomIn } from "lucide-react";
 import { type Ref, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { addSource, api, fileUrl, isActive, type MusicTrack, type Overlay, type Project, type Settings } from "@/lib/api";
-import { type Clip, clock, GAP, isGap, MAX_GAP, duplicateAt, full, layout, len, mapLines, MAX_SPEED, MIN_CLIP, MIN_SPEED, moveClip, removeAt, setProps, spd, splitAt, srcOf, totalLen, trans, trimEdge, uid } from "@/lib/timeline";
+import { type Clip, type Crop, clock, GAP, isGap, MAX_GAP, duplicateAt, full, layout, len, mapLines, MAX_SPEED, MIN_CLIP, MIN_SPEED, moveClip, removeAt, setProps, spd, splitAt, srcOf, totalLen, trans, trimEdge, uid } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 
 import { SilenceDialog } from "./silence-dialog";
@@ -47,6 +47,8 @@ type Props = {
   setSelOv: (id: string | null) => void;
   inspectorHost: HTMLElement | null;   // where the properties of what is selected are drawn (the right-hand panel)
   onInspect: () => void;               // something was selected: show that panel
+  cropMode: boolean;                   // the crop frame is on the video
+  onCropMode: (on: boolean) => void;
   handle?: Ref<TimelineHandle>;
 };
 
@@ -66,7 +68,7 @@ export type TimelineHandle = {
   addLayer: (src: number) => void;                                 // ... or over the picture
 };
 
-export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusic, idx, T, playing, showPlayhead, disabled, onSeekOut, onSelectClip, onTogglePlay, onApply, selOv, setSelOv, inspectorHost, onInspect, handle }: Props) {
+export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusic, idx, T, playing, showPlayhead, disabled, onSeekOut, onSelectClip, onTogglePlay, onApply, selOv, setSelOv, inspectorHost, onInspect, cropMode, onCropMode, handle }: Props) {
   const duration = p.media?.duration ?? 0;
   const { clips, commit, tweak, undo, redo } = tl;
   const rows = useMemo(() => layout(clips), [clips]);
@@ -81,10 +83,10 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
   const extras = p.extra_sources ?? [];
   /** What the timeline needs to know about one video: how long it is, its thumbnails, its name. */
   const srcInfo = (src: number) => src === GAP
-    ? { duration: MAX_GAP, film: undefined, name: "Khoảng trống" }
+    ? { duration: MAX_GAP, film: undefined, name: "Khoảng trống", image: false }
     : src === 0
-    ? { duration, film: p.film, name: "Video 1" }
-    : (() => { const e = extras.find((x) => x.id === src); return { duration: e?.duration ?? 0, film: e?.film, name: e?.name ?? `Video ${src + 1}` }; })();
+    ? { duration, film: p.film, name: "Video 1", image: false }
+    : (() => { const e = extras.find((x) => x.id === src); return { duration: e?.duration ?? 0, film: e?.film, name: e?.name ?? `Video ${src + 1}`, image: e?.kind === "image" }; })();
   const [selMusic, setSelMusic] = useState(false);
   const [tracks, setTracks] = useState<MusicTrack[]>([]);
   useEffect(() => { api.musicList().then(setTracks).catch(() => {}); }, []);
@@ -252,8 +254,8 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
     return null;
   };
   const uploadFiles = async (files: File[], index?: number) => {
-    const list = files.filter((f) => f.type.startsWith("video/") || /\.(mp4|mov|webm|mkv|m4v)$/i.test(f.name));
-    if (!list.length) { toast.error("Chỉ nhận file video (mp4, mov, webm, mkv)."); return; }
+    const list = files.filter((f) => f.type.startsWith("video/") || f.type.startsWith("image/") || /\.(mp4|mov|webm|mkv|m4v|jpe?g|png|webp)$/i.test(f.name));
+    if (!list.length) { toast.error("Chỉ nhận video (mp4, mov, webm, mkv) hoặc ảnh (jpg, png, webp)."); return; }
     let at = index;
     let ok = 0;
     for (const [i, f] of list.entries()) {
@@ -273,7 +275,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
     if (!dur) return;
     const at = index === undefined ? clips.length : Math.min(index, clips.length);
     const next = [...clips];
-    next.splice(at, 0, { id: uid(), src, start: 0, end: dur });
+    next.splice(at, 0, { id: uid(), src, start: 0, end: srcInfo(src).image ? 5 : dur });   // a photo starts at 5 seconds
     commit(next);
     setSelected(at);
     onSelectClip(at);
@@ -470,7 +472,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
         <ToolBtn disabled={disabled} label="Thêm khoảng trống 2 giây sau đoạn đang chọn" hint="màn đen, không tiếng" onClick={addGap}><SquareDashed /></ToolBtn>
         <ToolBtn disabled={disabled || isActive(p) || addPct !== null} label="Thêm video (chọn được nhiều file) vào cuối timeline, hoặc kéo file thả vào timeline" hint="dự án đã dịch thì nhận dạng và dịch lời luôn"
           onClick={() => addInput.current?.click()}>{addPct !== null ? <Loader2 className="animate-spin" /> : <Video />}</ToolBtn>
-        <input ref={addInput} type="file" hidden multiple accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mkv,.m4v"
+        <input ref={addInput} type="file" hidden multiple accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mkv,.m4v,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
           onChange={(e) => { const fs = Array.from(e.target.files ?? []); e.target.value = ""; if (fs.length) uploadFiles(fs); }} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -480,7 +482,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
             <DropdownMenuItem onSelect={() => layerInput.current?.click()}><Video /> Tải video mới…</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => addLayer(0)}>Video 1 (video chính)</DropdownMenuItem>
-            {extras.map((e) => <DropdownMenuItem key={e.id} onSelect={() => addLayer(e.id)}><span className="max-w-48 truncate">{e.name}</span></DropdownMenuItem>)}
+            {extras.filter((e) => e.kind !== "image").map((e) => <DropdownMenuItem key={e.id} onSelect={() => addLayer(e.id)}><span className="max-w-48 truncate">{e.name}</span></DropdownMenuItem>)}
           </DropdownMenuContent>
         </DropdownMenu>
         <input ref={layerInput} type="file" hidden accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mkv,.m4v"
@@ -669,6 +671,17 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
           <p className="text-xs font-medium">
             Đoạn {sel + 1}/{clips.length} · {clock(len(clips[sel]))}
           </p>
+          {srcInfo(srcOf(clips[sel])).image ? (
+            <div className="grid gap-2">
+              <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">Ảnh hiện trong
+                <span className="ml-auto font-mono text-foreground">{len(clips[sel]).toFixed(1)}s</span>
+              </Label>
+              <Slider min={0.5} max={30} step={0.1} disabled={disabled} value={[Math.min(30, len(clips[sel]))]}
+                onValueChange={([v]) => tw(clips.map((c, i) => (i === sel ? { ...c, start: 0, end: v } : c)), `img${sel}`)} aria-label="Thời gian hiện ảnh" />
+              <p className="text-[11px] text-muted-foreground">Kéo mép đoạn trên timeline cũng đổi được (tối đa 2 phút).</p>
+            </div>
+          ) : (
+            <>
           <div className="grid gap-2">
             <Label className="flex items-center gap-1.5 text-xs text-muted-foreground"><Gauge className="size-3.5" /> Tốc độ
               <span className="ml-auto font-mono text-foreground">{+spd(clips[sel]).toFixed(2)}×</span>
@@ -691,6 +704,33 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
             </Label>
             <Slider min={0} max={2} step={0.05} disabled={disabled} value={[clips[sel].volume ?? 1]}
               onValueChange={([v]) => tw(setProps(clips, sel, { volume: v }), `vol${sel}`)} aria-label="Âm thanh gốc" />
+          </div>
+            </>
+          )}
+          <div className="grid gap-2" aria-label="Cắt xén và xoay">
+            <Label className="text-xs text-muted-foreground">Cắt xén, xoay, lật</Label>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <ToolBtn disabled={disabled} label={cropMode ? "Xong cắt xén" : "Cắt xén khung hình (kéo khung trên video)"} hint="giữ phần trong khung, phóng to cho đầy" onClick={() => onCropMode(!cropMode)}><CropIcon /></ToolBtn>
+              <ToolBtn disabled={disabled} label="Xoay 90° theo chiều kim đồng hồ" hint="" onClick={() => tw(setProps(clips, sel, { rotate: (((clips[sel].rotate ?? 0) + 90) % 360) as 0 | 90 | 180 | 270 }), `rot${sel}`)}><RotateCw /></ToolBtn>
+              <ToolBtn disabled={disabled} label="Lật ngang (như soi gương)" hint="" onClick={() => tw(setProps(clips, sel, { flip: !clips[sel].flip }), `flip${sel}`)}><FlipHorizontal /></ToolBtn>
+              <ToolBtn disabled={disabled || !(clips[sel].crop || clips[sel].rotate || clips[sel].flip)} label="Bỏ cắt xén, xoay, lật" hint="" onClick={() => { onCropMode(false); tw(clips.map((c, i) => (i === sel ? { ...c, crop: undefined, rotate: undefined, flip: undefined } : c)), `fxreset${sel}`); }}><RotateCcw /></ToolBtn>
+            </div>
+            {cropMode && (
+              <div className="flex flex-wrap gap-1">
+                {([["Tự do", null], ["9:16", 9 / 16], ["1:1", 1], ["4:5", 4 / 5], ["16:9", 16 / 9]] as const).map(([name, ratio]) => (
+                  <button key={name} type="button" disabled={disabled} onClick={() => {
+                    const info = clips[sel].src ? extras.find((e) => e.id === clips[sel].src) : p.media;
+                    const W = info?.width ?? 16, H = info?.height ?? 9;
+                    let crop: Crop | undefined;
+                    if (ratio) {
+                      const w = ratio >= W / H ? 1 : (ratio * H) / W, h = ratio >= W / H ? W / ratio / H : 1;
+                      crop = { x: (1 - w) / 2, y: (1 - h) / 2, w, h };
+                    }
+                    tw(clips.map((c, i) => (i === sel ? { ...c, crop } : c)), `cropaspect${sel}${name}`);
+                  }} className="rounded-full border px-2.5 py-1 text-xs hover:bg-accent">{name}</button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="grid gap-2">
             <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">Mờ dần vào

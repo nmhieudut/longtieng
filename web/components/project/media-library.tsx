@@ -26,9 +26,9 @@ export function MediaLibrary({ project: p, tl, onApply, disabled }: {
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
   const [confirm, setConfirm] = useState<number | null>(null);
-  const items: { id: number; name: string; duration: number; film?: Film; has_audio: boolean }[] = [
+  const items: { id: number; name: string; duration: number; film?: Film; has_audio: boolean; image?: boolean }[] = [
     { id: 0, name: p.title, duration: p.media?.duration ?? 0, film: p.film, has_audio: true },
-    ...(p.extra_sources ?? []).map((e) => ({ id: e.id, name: e.name, duration: e.duration, film: e.film, has_audio: e.has_audio })),
+    ...(p.extra_sources ?? []).map((e) => ({ id: e.id, name: e.name, duration: e.duration, film: e.film, has_audio: e.has_audio, image: e.kind === "image" })),
   ];
   const uses = (id: number) => (p.timeline?.clips ?? (id === 0 ? [{ src: 0 }] : [])).filter((c) => (c.src ?? 0) === id).length
     + (p.overlays ?? []).filter((o) => o.kind === "video" && (o.src ?? 0) === id).length;
@@ -42,10 +42,10 @@ export function MediaLibrary({ project: p, tl, onApply, disabled }: {
         className={cn("flex min-w-0 flex-col items-center gap-1.5 break-words rounded-xl border-[1.5px] border-dashed border-input bg-muted/40 px-3 py-5 text-center text-sm transition-colors disabled:opacity-60",
           over ? "border-primary bg-primary/5" : "hover:border-primary/60 hover:bg-accent")}>
         <Upload className="size-5 text-primary" />
-        <span className="font-medium">Thêm video (chọn nhiều file được)</span>
+        <span className="font-medium">Thêm video hoặc ảnh (chọn nhiều file được)</span>
         <span className="text-xs text-muted-foreground">hoặc kéo file vào đây, hay thả thẳng lên timeline</span>
       </button>
-      <input ref={input} type="file" hidden multiple accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mkv,.m4v"
+      <input ref={input} type="file" hidden multiple accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mkv,.m4v,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
         onChange={(e) => { const fs = Array.from(e.target.files ?? []); e.target.value = ""; if (fs.length) tl.current?.uploadFiles(fs); }} />
       <p className="text-xs text-muted-foreground">Kéo một video xuống timeline để chèn vào giữa hai đoạn, hoặc thả vào hàng chữ/hình dán để chồng lên video.</p>
       <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
@@ -60,12 +60,12 @@ export function MediaLibrary({ project: p, tl, onApply, disabled }: {
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-medium" title={it.name}>{it.id === 0 ? `Video chính · ${it.name}` : it.name}</span>
               <span className="block text-xs text-muted-foreground">
-                {clock(it.duration)}{!it.has_audio && " · không tiếng"} · {uses(it.id) ? `dùng ${uses(it.id)} lần` : "chưa dùng"}
+                {it.image ? "Ảnh" : clock(it.duration)}{!it.has_audio && !it.image && " · không tiếng"} · {uses(it.id) ? `dùng ${uses(it.id)} lần` : "chưa dùng"}
               </span>
             </span>
             <IconButton label="Chèn vào cuối timeline" disabled={disabled} onClick={() => tl.current?.insertSource(it.id)}><Plus /></IconButton>
-            <IconButton label="Chồng lên video từ đường chỉ" disabled={disabled} onClick={() => tl.current?.addLayer(it.id)}><Layers /></IconButton>
-            {it.id !== 0 && it.has_audio && !p.segments.some((s) => (s.src_id ?? 0) === it.id) && p.status.stage !== "new" && (
+            {!it.image && <IconButton label="Chồng lên video từ đường chỉ" disabled={disabled} onClick={() => tl.current?.addLayer(it.id)}><Layers /></IconButton>}
+            {it.id !== 0 && it.has_audio && !it.image && !p.segments.some((s) => (s.src_id ?? 0) === it.id) && p.status.stage !== "new" && (
               <IconButton label="Nhận dạng và dịch lời của video này" disabled={disabled || isActive(p)}
                 onClick={() => api.retrySource(p.id, it.id).then(onApply).catch((err) => toast.error((err as Error).message))}><RotateCw /></IconButton>
             )}

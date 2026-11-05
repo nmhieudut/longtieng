@@ -11,7 +11,11 @@ export type Clip = {
   fade_in?: number;    // seconds, from/to black and silence
   fade_out?: number;
   transition?: number; // seconds this clip overlaps the one before it (a crossfade)
+  crop?: Crop;         // the part of the picture that stays (fractions of the picture as it is in the file)
+  rotate?: 0 | 90 | 180 | 270;   // turned clockwise after the crop
+  flip?: boolean;      // mirrored left to right
 };
+export type Crop = { x: number; y: number; w: number; h: number };
 
 export const MIN_CLIP = 0.2;
 /** `src` of a blank clip (black picture, silence). It is only a length: start 0, end = seconds. */
@@ -33,7 +37,7 @@ export const full = (duration: number): Clip[] => [{ id: "full", start: 0, end: 
 
 /** Just a part of the main video: nothing changed about how it plays. */
 export const isPlain = (c: Clip) =>
-  srcOf(c) === 0 && spd(c) === 1 && (c.volume ?? 1) === 1 && !(c.fade_in || 0) && !(c.fade_out || 0) && !(c.transition || 0);
+  srcOf(c) === 0 && spd(c) === 1 && (c.volume ?? 1) === 1 && !(c.fade_in || 0) && !(c.fade_out || 0) && !(c.transition || 0) && !c.crop && !c.rotate && !c.flip;
 export const isFull = (clips: Clip[], duration: number) =>
   clips.length === 1 && clips[0].start <= 0.05 && clips[0].end >= duration - 0.05 && isPlain(clips[0]);
 
@@ -113,7 +117,7 @@ export function trimEdge(clips: Clip[], idx: number, side: "start" | "end", src:
 }
 
 /** Change how a clip plays (speed, volume, fades), keeping every fade inside half the clip. */
-export function setProps(clips: Clip[], idx: number, patch: Partial<Pick<Clip, "speed" | "volume" | "fade_in" | "fade_out" | "transition">>): Clip[] {
+export function setProps(clips: Clip[], idx: number, patch: Partial<Pick<Clip, "speed" | "volume" | "fade_in" | "fade_out" | "transition" | "crop" | "rotate" | "flip">>): Clip[] {
   const next = [...clips];
   const c = { ...clips[idx], ...patch };
   if (patch.speed !== undefined) c.speed = Math.min(MAX_SPEED, Math.max(MIN_SPEED, patch.speed));

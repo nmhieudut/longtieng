@@ -305,6 +305,25 @@ def _pipeline(clip: Path) -> str:
             from app import render as _render_mod
             if _render_mod.mean_volume_db(out2) < -50:
                 raise RuntimeError("chỉ chỉnh sửa: mất tiếng gốc")
+            # a photo as a clip, a cropped / turned clip: the export must be exactly as long as the timeline says
+            png = clip.parent / "photo.png"
+            r = cancel.run([config.FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=400x300:d=1", "-frames:v", "1", str(png)], timeout=60)
+            if r.returncode != 0:
+                raise RuntimeError(r.stderr[-300:])
+            with open(png, "rb") as f:
+                r = c.post(f"/api/projects/{eid}/sources", files={"file": ("photo.png", f, "image/png")})
+            r.raise_for_status()
+            ph = [e for e in r.json()["extra_sources"] if e.get("kind") == "image"]
+            if not ph:
+                raise RuntimeError("ảnh không được thêm như một nguồn")
+            clips3 = [{"start": 0, "end": 2.0, "crop": {"x": 0.1, "y": 0.1, "w": 0.5, "h": 0.5}, "rotate": 90, "flip": True},
+                      {"src": ph[0]["id"], "start": 0, "end": 3.0, "fade_in": 0.5}]
+            c.put(f"/api/projects/{eid}/timeline", json={"clips": clips3}).raise_for_status()
+            c.post(f"/api/projects/{eid}/render", json={"preview_start": None}).raise_for_status()
+            _wait(c, eid, {"done"}, 600)
+            pr = cancel.run([config.FFPROBE, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(out2)], timeout=60)
+            if abs(float(pr.stdout.strip()) - 5.0) > 0.8:
+                raise RuntimeError(f"ảnh và cắt xén: video dài {pr.stdout.strip()}s (cần 5s)")
             # cut the silences, the saved versions, and the quality check of the export
             r = c.post(f"/api/projects/{eid}/trim-silence", json={"src": 0, "start": 0, "end": D2, "profile": "tight"})
             r.raise_for_status()

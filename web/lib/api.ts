@@ -16,7 +16,7 @@ export type Segment = {
 /** A video added to the project besides the main one. */
 export type ExtraSource = {
   id: number; file: string; name: string; duration: number; width: number; height: number;
-  has_audio: boolean; lang?: string; film?: { n: number; w: number; h: number; duration: number; file: string };
+  has_audio: boolean; kind?: "image"; default_len?: number; lang?: string; film?: { n: number; w: number; h: number; duration: number; file: string };
 };
 
 export type Settings = {

@@ -5,6 +5,7 @@ import { type RefObject, useCallback, useEffect, useRef, useState } from "react"
 
 import { IconButton } from "@/components/ui/icon-button";
 import { Slider } from "@/components/ui/slider";
+import type { Crop } from "@/lib/timeline";
 import { desktopApi, fileUrl, fmt, type Overlay, type Project, type Settings } from "@/lib/api";
 import { colorIsDefault, cssFilter, vignetteOverlay, warmthOverlay } from "@/lib/color";
 import { cn } from "@/lib/utils";
@@ -41,6 +42,11 @@ type Props = {
   onDeleteOverlay: () => void;
   playing: boolean;
   gap: boolean;            // a blank clip is on the playhead: black, no video
+  stillImage: string | null;   // ... or a photo: shown instead of the video
+  stillDims: { w: number; h: number } | null;   // its size in pixels
+  fx: { crop?: Crop; rotate?: number; flip?: boolean } | null;   // how the clip on the playhead is cropped / turned
+  cropMode: boolean;       // the crop frame is being edited on the picture
+  onCrop: (c: Crop | null) => void;
   volume: number;
   muted: boolean;
   onVolume: (v: number) => void;
@@ -60,7 +66,7 @@ const VIEWS = [
 
 export function VideoPanel({
   project: p, videoRef, src, view, onView, time, activeIdx, mask, color, srcId, edited, overlays, outTime,
-  logo, onMoveLogo, onCommitLogo, onResizeLogo, selectedOverlay, editable, onSelectOverlay, onMoveOverlay, onResizeOverlay, onEditText, onAddText, onAddSticker, onDuplicateOverlay, onDeleteOverlay, playing, gap, volume, muted, onVolume, onMuted, onTogglePlay, scrub, onSeek, onTime, onLoaded,
+  logo, onMoveLogo, onCommitLogo, onResizeLogo, stillImage, stillDims, fx, cropMode, onCrop, selectedOverlay, editable, onSelectOverlay, onMoveOverlay, onResizeOverlay, onEditText, onAddText, onAddSticker, onDuplicateOverlay, onDeleteOverlay, playing, gap, volume, muted, onVolume, onMuted, onTogglePlay, scrub, onSeek, onTime, onLoaded,
 }: Props) {
   const box = useMaskBox(videoRef, src);
   const stage = useRef<HTMLDivElement>(null);
@@ -155,6 +161,29 @@ export function VideoPanel({
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
+  // the clip on the playhead shown cropped / turned: the part that stays is scaled up to fill the picture area
+  // where the picture sits in the stage: the video's own box, or for a photo the box it would have
+  const fxBox = (() => {
+    if (!box) return null;
+    if (!(gap && stillImage && stillDims)) return box;
+    const k = Math.min(box.sw / stillDims.w, box.sh / stillDims.h);
+    const w = stillDims.w * k, h = stillDims.h * k;
+    return { ...box, x: (box.sw - w) / 2, y: (box.sh - h) / 2, w, h };
+  })();
+  const previewFx = (() => {
+    if (!fx || cropMode || view !== "source" || !fxBox || (gap && !stillImage)) return null;
+    const box = fxBox;
+    const turned = (fx.rotate ?? 0) % 180 !== 0;
+    const c = fx.crop ?? { x: 0, y: 0, w: 1, h: 1 };
+    const rw = turned ? c.h * box.h : c.w * box.w, rh = turned ? c.w * box.w : c.h * box.h;
+    if (!fx.crop && !fx.rotate && !fx.flip) return null;
+    const k = Math.max(box.w / rw, box.h / rh);
+    const dx = (c.x + c.w / 2 - 0.5) * box.w, dy = (c.y + c.h / 2 - 0.5) * box.h;
+    return {
+      transformOrigin: `${box.x + box.w / 2}px ${box.y + box.h / 2}px`,
+      transform: `scale(${k}) ${fx.flip ? "scaleX(-1) " : ""}rotate(${fx.rotate ?? 0}deg) translate(${-dx}px, ${-dy}px)`,
+    } as React.CSSProperties;
+  })();
   const go = (t: number) => {
     if (scrub) { scrub.seek(t); return; }
     const v = videoRef.current;
@@ -167,23 +196,34 @@ export function VideoPanel({
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div ref={stage} data-stage className={cn("group/stage min-h-0 flex-1 overflow-hidden bg-black", full ? "fixed inset-0 z-[100]" : "relative rounded-xl")}>
         {src ? (
-          <video
-            ref={videoRef}
-            src={src}
-            playsInline
-            preload="metadata"
-            className="absolute inset-0 size-full cursor-pointer bg-black object-contain"
-            style={live ? { filter: cssFilter(color) } : undefined}
-            onClick={() => { onSelectOverlay(null); onTogglePlay(); }}
-            onTimeUpdate={(e) => onTime(e.currentTarget.currentTime)}
-            onLoadedMetadata={(e) => { setVd({ src, d: e.currentTarget.duration || 0 }); onLoaded(); }}
-            onDurationChange={(e) => setVd({ src, d: e.currentTarget.duration || 0 })}
-          />
+          <div className="absolute inset-0" style={previewFx ? { clipPath: `inset(${box!.y}px ${box!.sw - box!.x - box!.w}px ${box!.sh - box!.y - box!.h}px ${box!.x}px)` } : undefined}>
+            <video
+              ref={videoRef}
+              src={src}
+              playsInline
+              preload="metadata"
+              className="absolute inset-0 size-full cursor-pointer bg-black object-contain"
+              style={{ ...(live ? { filter: cssFilter(color) } : {}), ...(previewFx ? previewFx : {}) }}
+              onClick={() => { onSelectOverlay(null); onTogglePlay(); }}
+              onTimeUpdate={(e) => onTime(e.currentTarget.currentTime)}
+              onLoadedMetadata={(e) => { setVd({ src, d: e.currentTarget.duration || 0 }); onLoaded(); }}
+              onDurationChange={(e) => setVd({ src, d: e.currentTarget.duration || 0 })}
+            />
+          </div>
         ) : (
           <div className="grid size-full place-items-center text-sm text-white/60">Đang tải video…</div>
         )}
         {gap && (
-          <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black text-sm text-white/50">Khoảng trống</div>
+          <div className="pointer-events-none absolute inset-0 grid place-items-center overflow-hidden bg-black text-sm text-white/50"
+            style={previewFx && fxBox ? { clipPath: `inset(${fxBox.y}px ${fxBox.sw - fxBox.x - fxBox.w}px ${fxBox.sh - fxBox.y - fxBox.h}px ${fxBox.x}px)` } : undefined}>
+            {stillImage ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={stillImage} alt="" className="absolute inset-0 size-full object-contain" style={previewFx ?? undefined} />
+            ) : "Khoảng trống"}
+          </div>
+        )}
+        {cropMode && fxBox && view === "source" && (
+          <CropEditor box={fxBox} crop={fx?.crop ?? null} onChange={onCrop} />
         )}
         {src && !playing && (
           <button type="button" onClick={onTogglePlay} aria-label="Phát"
@@ -336,13 +376,13 @@ export function VideoPanel({
 
 /** Where the picture actually sits inside the <video> box (letterboxing). */
 function useMaskBox(videoRef: RefObject<HTMLVideoElement | null>, src: string | null) {
-  const [box, setBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [box, setBox] = useState<{ x: number; y: number; w: number; h: number; sw: number; sh: number } | null>(null);
   const measure = useCallback(() => {
     const v = videoRef.current;
     if (!v || !v.videoWidth) return setBox(null);
     const s = Math.min(v.clientWidth / v.videoWidth, v.clientHeight / v.videoHeight);
     const w = v.videoWidth * s, h = v.videoHeight * s;
-    setBox({ x: (v.clientWidth - w) / 2, y: (v.clientHeight - h) / 2, w, h });
+    setBox({ x: (v.clientWidth - w) / 2, y: (v.clientHeight - h) / 2, w, h, sw: v.clientWidth, sh: v.clientHeight });
   }, [videoRef]);
 
   useEffect(() => {
@@ -418,4 +458,49 @@ function LayerVideo({ o, url, playing, outTime, mute, master, style, className, 
     if (playing) v.play().catch(() => {}); else v.pause();
   }, [playing, mute, master, o.volume]);
   return <video ref={ref} src={url} playsInline preload="auto" className={className} style={style} onPointerDown={onPointerDown} />;
+}
+
+/** Frame on the picture to choose the part that stays: drag it, drag its corners or edges. */
+function CropEditor({ box, crop, onChange }: { box: { x: number; y: number; w: number; h: number }; crop: Crop | null; onChange: (c: Crop | null) => void }) {
+  const c = crop ?? { x: 0, y: 0, w: 1, h: 1 };
+  const MIN = 0.1;
+  const start = (e: React.PointerEvent, edges: { l?: boolean; r?: boolean; t?: boolean; b?: boolean }, move: boolean) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const x0 = e.clientX, y0 = e.clientY, c0 = { ...c };
+    const onMove = (ev: PointerEvent) => {
+      const dx = (ev.clientX - x0) / box.w, dy = (ev.clientY - y0) / box.h;
+      let { x, y, w, h } = c0;
+      if (move) { x = Math.min(1 - w, Math.max(0, x + dx)); y = Math.min(1 - h, Math.max(0, y + dy)); }
+      if (edges.l) { const nx = Math.min(c0.x + c0.w - MIN, Math.max(0, c0.x + dx)); w = c0.x + c0.w - nx; x = nx; }
+      if (edges.r) w = Math.min(1 - c0.x, Math.max(MIN, c0.w + dx));
+      if (edges.t) { const ny = Math.min(c0.y + c0.h - MIN, Math.max(0, c0.y + dy)); h = c0.y + c0.h - ny; y = ny; }
+      if (edges.b) h = Math.min(1 - c0.y, Math.max(MIN, c0.h + dy));
+      onChange({ x, y, w, h });
+    };
+    const up = () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", up);
+  };
+  const handles: [string, { l?: boolean; r?: boolean; t?: boolean; b?: boolean }, string][] = [
+    ["-left-1.5 -top-1.5 cursor-nwse-resize", { l: true, t: true }, "g"], ["-right-1.5 -top-1.5 cursor-nesw-resize", { r: true, t: true }, "g"],
+    ["-bottom-1.5 -left-1.5 cursor-nesw-resize", { l: true, b: true }, "g"], ["-bottom-1.5 -right-1.5 cursor-nwse-resize", { r: true, b: true }, "g"],
+    ["left-1/2 -top-1.5 -translate-x-1/2 cursor-ns-resize", { t: true }, "e"], ["left-1/2 -bottom-1.5 -translate-x-1/2 cursor-ns-resize", { b: true }, "e"],
+    ["top-1/2 -left-1.5 -translate-y-1/2 cursor-ew-resize", { l: true }, "e"], ["top-1/2 -right-1.5 -translate-y-1/2 cursor-ew-resize", { r: true }, "e"],
+  ];
+  return (
+    <div className="absolute" style={{ left: box.x, top: box.y, width: box.w, height: box.h }}>
+      <div className="absolute cursor-move border-2 border-white shadow-[0_0_0_9999px_rgba(0,0,0,0.6)]"
+        style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%`, width: `${c.w * 100}%`, height: `${c.h * 100}%` }}
+        onPointerDown={(e) => start(e, {}, true)}>
+        <div className="pointer-events-none absolute inset-0 grid grid-cols-3 grid-rows-3">
+          {Array.from({ length: 9 }, (_, i) => <span key={i} className="border border-white/25" />)}
+        </div>
+        {handles.map(([pos, edges, k]) => (
+          <span key={pos} onPointerDown={(e) => start(e, edges, false)}
+            className={cn("absolute rounded-sm border-2 border-primary bg-white", k === "g" ? "size-3" : "h-3 w-3", pos)} />
+        ))}
+      </div>
+    </div>
+  );
 }
