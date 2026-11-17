@@ -127,6 +127,19 @@ def demucs_available() -> bool:
 
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+# models the user can pick in Cài đặt (newest first). They only take the default temperature.
+GPT_MODELS = ["gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+
+
+def gpt_model() -> str:
+    m = user_settings().get("gpt_model")
+    return m if m in GPT_MODELS else OPENAI_MODEL
+
+
+def gpt_args(temperature: float) -> dict:
+    """model= (and temperature= where the model accepts one) for a chat call."""
+    m = gpt_model()
+    return {"model": m} if m in GPT_MODELS else {"model": m, "temperature": temperature}
 YTDLP_COOKIES_BROWSER = os.getenv("YTDLP_COOKIES_BROWSER", "").strip()
 # cookies.txt (Netscape format) exported from the browser; used instead of the browser when set
 YTDLP_COOKIES_FILE = os.path.expanduser(os.getenv("YTDLP_COOKIES_FILE", "").strip())
@@ -168,20 +181,18 @@ def fonts_rel(cwd: Path) -> str:
     return os.path.relpath(FONTS_DIR, cwd).replace("\\", "/")
 
 
-OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip()
-
-# Language the video is dubbed INTO. "cps" = characters a TTS voice reads per second at 1.0x (measured with the
-# Edge voices on a normal sentence; used to size translations and to estimate whether a line will fit).
+# Language the video is dubbed INTO. "cps" = characters a TTS voice reads per second at 1.0x (measured on a
+# normal sentence; used to size translations and to estimate whether a line will fit).
 TARGET_LANGS: dict[str, dict] = {
     "vi": {"label": "Tiếng Việt", "name": "tiếng Việt", "google": "vi", "voice": "google:vi", "cps": 17.0,
            "font_mac": "Be Vietnam Pro", "font_win": "Be Vietnam Pro", "cjk": False},
-    "en": {"label": "Tiếng Anh", "name": "tiếng Anh", "google": "en", "voice": "en-US-AriaNeural", "cps": 16.0,
+    "en": {"label": "Tiếng Anh", "name": "tiếng Anh", "google": "en", "voice": "google:en", "cps": 16.0,
            "font_mac": "Be Vietnam Pro", "font_win": "Be Vietnam Pro", "cjk": False},
-    "zh": {"label": "Tiếng Trung", "name": "tiếng Trung (giản thể)", "google": "zh-CN", "voice": "zh-CN-XiaoxiaoNeural",
+    "zh": {"label": "Tiếng Trung", "name": "tiếng Trung (giản thể)", "google": "zh-CN", "voice": "google:zh-CN",
            "cps": 5.0, "font_mac": "PingFang SC", "font_win": "Microsoft YaHei", "cjk": True},
-    "ja": {"label": "Tiếng Nhật", "name": "tiếng Nhật", "google": "ja", "voice": "ja-JP-NanamiNeural", "cps": 5.5,
+    "ja": {"label": "Tiếng Nhật", "name": "tiếng Nhật", "google": "ja", "voice": "google:ja", "cps": 5.5,
            "font_mac": "Hiragino Sans", "font_win": "Yu Gothic", "cjk": True},
-    "ko": {"label": "Tiếng Hàn", "name": "tiếng Hàn", "google": "ko", "voice": "ko-KR-SunHiNeural", "cps": 7.5,
+    "ko": {"label": "Tiếng Hàn", "name": "tiếng Hàn", "google": "ko", "voice": "google:ko", "cps": 7.5,
            "font_mac": "Apple SD Gothic Neo", "font_win": "Malgun Gothic", "cjk": True},
 }
 
@@ -206,42 +217,10 @@ def _voices() -> dict[str, dict]:
 
     main = "Giọng chính"
     add("google:vi", "Chị Google", main, "nữ", "Giọng Google Dịch quen thuộc, vui, rõ ràng · miễn phí")
-    add("vi-VN-HoaiMyNeural", "Hoài My", "Giọng Việt (Edge, miễn phí)", "nữ", "Giọng chuẩn miền Bắc")
-    add("vi-VN-NamMinhNeural", "Nam Minh", "Giọng Việt (Edge, miễn phí)", "nam", "Giọng chuẩn miền Bắc")
-    # Edge "multilingual" voices also speak Vietnamese (checked by transcribing them back with Whisper)
-    multi = [
-        ("en-US-AvaMultilingualNeural", "Ava", "nữ"), ("en-US-EmmaMultilingualNeural", "Emma", "nữ"),
-        ("fr-FR-VivienneMultilingualNeural", "Vivienne", "nữ"), ("de-DE-SeraphinaMultilingualNeural", "Seraphina", "nữ"),
-        ("pt-BR-ThalitaMultilingualNeural", "Thalita", "nữ"),
-        ("en-US-AndrewMultilingualNeural", "Andrew", "nam"), ("en-US-BrianMultilingualNeural", "Brian", "nam"),
-        ("en-AU-WilliamMultilingualNeural", "William", "nam"), ("fr-FR-RemyMultilingualNeural", "Rémy", "nam"),
-        ("de-DE-FlorianMultilingualNeural", "Florian", "nam"), ("it-IT-GiuseppeMultilingualNeural", "Giuseppe", "nam"),
-        ("ko-KR-HyunsuMultilingualNeural", "Hyunsu", "nam"),
-    ]
-    for vid, name, g in multi:
-        # the English ones are also natural in English; the rest only claim Vietnamese
-        add(vid, name, "Đa ngôn ngữ (Edge, miễn phí)", g, "Có thể hơi lơ lớ",
-            langs=("vi", "en") if vid.startswith("en-") else ("vi", "ko") if vid.startswith("ko-") else ("vi",))
-    # other languages: a few Edge voices (checked against Edge's own voice list) and Google's voice
-    others = {
-        "en": [("en-US-AriaNeural", "Aria", "nữ"), ("en-US-JennyNeural", "Jenny", "nữ"), ("en-US-GuyNeural", "Guy", "nam"),
-               ("en-GB-SoniaNeural", "Sonia (Anh)", "nữ"), ("en-GB-RyanNeural", "Ryan (Anh)", "nam")],
-        "zh": [("zh-CN-XiaoxiaoNeural", "Xiaoxiao", "nữ"), ("zh-CN-XiaoyiNeural", "Xiaoyi", "nữ"),
-               ("zh-CN-YunxiNeural", "Yunxi", "nam"), ("zh-CN-YunjianNeural", "Yunjian", "nam"),
-               ("zh-CN-YunyangNeural", "Yunyang", "nam")],
-        "ja": [("ja-JP-NanamiNeural", "Nanami", "nữ"), ("ja-JP-KeitaNeural", "Keita", "nam")],
-        "ko": [("ko-KR-SunHiNeural", "SunHi", "nữ"), ("ko-KR-InJoonNeural", "InJoon", "nam")],
-    }
-    for lang, items in others.items():
-        grp = f"{TARGET_LANGS[lang]['label']} (Edge, miễn phí)"
-        for vid, name, g in items:
-            add(vid, name, grp, g, langs=(lang,))
-        add(f"google:{TARGET_LANGS[lang]['google']}", "Google", grp, "nữ", "Giọng Google Dịch · miễn phí", langs=(lang,))
-    # listed even without a key so the picker is stable; dub.py says when the key is missing
-    for name, g in [("coral", "nữ"), ("nova", "nữ"), ("shimmer", "nữ"), ("sage", "nữ"),
-                    ("ash", "nam"), ("onyx", "nam"), ("echo", "nam"), ("verse", "nam")]:
-        add(f"openai:{name}", name.capitalize(), "OpenAI (cần API key, ~0,015$/phút)", g, "Biểu cảm hơn, đọc chậm hơn",
-            langs=tuple(TARGET_LANGS))
+    for lang, info in TARGET_LANGS.items():   # the other languages: Google's voice
+        if lang != "vi":
+            add(f"google:{info['google']}", "Google", f"{info['label']} (Google, miễn phí)", "nữ",
+                "Giọng Google Dịch · miễn phí", langs=(lang,))
     from . import vieneu_tts  # offline voices: only listed when this build has the package
 
     if vieneu_tts.available():
@@ -264,9 +243,9 @@ VOICES = _voices()
 
 # Vietnamese TTS speaks roughly this many characters per second at 1.0x.
 # Used to estimate whether a line fits before any audio exists.
-VI_CHARS_PER_SEC = 17.0  # measured ~16–19 on HoaiMy at 1.0x (see TARGET_LANGS for the other languages)
-# Edge TTS speed-up we allow on a single line, then atempo on top of that.
-MAX_EDGE_SPEEDUP = 1.35
+VI_CHARS_PER_SEC = 17.0  # measured ~16–19 at 1.0x (see TARGET_LANGS for the other languages)
+# Speed-up we allow on a single line by reading it faster, then atempo on top of that.
+MAX_VOICE_SPEEDUP = 1.35
 MAX_ATEMPO = 1.15
 
 SAMPLE_RATE = 48000
@@ -318,6 +297,12 @@ DEFAULT_SETTINGS = {
         "aspect": "original",  # "original" | "9:16" | "16:9" | "1:1" | "4:5"
         "fit": "blur",         # "blur": whole video on a blurred copy of itself | "crop": fill, cut the edges
         "zoom": 1.0,           # 1.0 – 2.0
+        "x": 0.0,              # move the picture on the canvas: -1 (left) .. 1 (right), where there is room
+        "y": 0.0,              # -1 (up) .. 1 (down)
+        "bg": "blur",          # what fills the canvas around the picture: "blur" | "color" | "image"
+        "blur": 40,            # how blurred the "blur" background is, 5 – 100
+        "bg_color": "#000000",
+        "bg_image": None,      # id in the logo / sticker library
     },
     "color": {                 # picture adjustments, like a phone video editor; 0 = untouched
         "brightness": 0,       # -100 .. 100

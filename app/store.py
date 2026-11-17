@@ -66,6 +66,14 @@ def clean_settings(s: dict) -> dict:
     m["height"] = min(50, max(2, float(m["height"])))
     fr = s["frame"]
     fr["zoom"] = min(2.0, max(1.0, float(fr["zoom"])))
+    fr["x"], fr["y"] = (round(min(1.0, max(-1.0, float(fr[k]))), 3) for k in ("x", "y"))
+    fr["blur"] = int(min(100, max(5, float(fr["blur"]))))
+    if fr["bg"] not in ("blur", "color", "image"):
+        fr["bg"] = "blur"
+    if not (isinstance(fr["bg_color"], str) and re.fullmatch(r"#[0-9a-fA-F]{6}", fr["bg_color"])):
+        fr["bg_color"] = "#000000"
+    if fr["bg_image"] is not None and not isinstance(fr["bg_image"], str):
+        fr["bg_image"] = None
     co = s["color"]
     for k in ("brightness", "contrast", "saturation", "temperature"):
         co[k] = int(min(100, max(-100, float(co[k]))))

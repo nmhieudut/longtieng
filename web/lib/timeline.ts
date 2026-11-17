@@ -14,7 +14,10 @@ export type Clip = {
   crop?: Crop;         // the part of the picture that stays (fractions of the picture as it is in the file)
   rotate?: 0 | 90 | 180 | 270;   // turned clockwise after the crop
   flip?: boolean;      // mirrored left to right
+  motion?: "in" | "out";       // slow zoom over the clip: 100 % -> 115 % ("in") or back ("out")
+  color?: Partial<ClipColor>;   // this clip's own colour, on top of the whole video's (only the changed sliders)
 };
+export type ClipColor = { brightness: number; contrast: number; saturation: number; temperature: number; sharpness: number; vignette: number };
 export type Crop = { x: number; y: number; w: number; h: number };
 
 export const MIN_CLIP = 0.2;
@@ -37,7 +40,7 @@ export const full = (duration: number): Clip[] => [{ id: "full", start: 0, end: 
 
 /** Just a part of the main video: nothing changed about how it plays. */
 export const isPlain = (c: Clip) =>
-  srcOf(c) === 0 && spd(c) === 1 && (c.volume ?? 1) === 1 && !(c.fade_in || 0) && !(c.fade_out || 0) && !(c.transition || 0) && !c.crop && !c.rotate && !c.flip;
+  srcOf(c) === 0 && spd(c) === 1 && (c.volume ?? 1) === 1 && !(c.fade_in || 0) && !(c.fade_out || 0) && !(c.transition || 0) && !c.crop && !c.rotate && !c.flip && !c.color && !c.motion;
 export const isFull = (clips: Clip[], duration: number) =>
   clips.length === 1 && clips[0].start <= 0.05 && clips[0].end >= duration - 0.05 && isPlain(clips[0]);
 
@@ -91,6 +94,17 @@ export function splitAt(clips: Clip[], T: number): { clips: Clip[]; idx: number 
   return { clips: next, idx: idx + 1 };
 }
 
+/** Drop the part of the clip under output time T that is before it ("left") or after it ("right").
+ *  null when T is too close to that clip's edge. */
+export function trimAt(clips: Clip[], T: number, side: "left" | "right"): { clips: Clip[]; idx: number } | null {
+  const { idx, src } = locate(clips, T);
+  const c = clips[idx];
+  if (!c || src - c.start < MIN_CLIP || c.end - src < MIN_CLIP) return null;
+  const next = [...clips];
+  next[idx] = side === "left" ? { ...c, start: src, fade_in: 0, transition: 0 } : { ...c, end: src, fade_out: 0 };
+  return { clips: next, idx };
+}
+
 export const removeAt = (clips: Clip[], idx: number): Clip[] => clips.filter((_, i) => i !== idx);
 
 export function duplicateAt(clips: Clip[], idx: number): Clip[] {
@@ -117,7 +131,7 @@ export function trimEdge(clips: Clip[], idx: number, side: "start" | "end", src:
 }
 
 /** Change how a clip plays (speed, volume, fades), keeping every fade inside half the clip. */
-export function setProps(clips: Clip[], idx: number, patch: Partial<Pick<Clip, "speed" | "volume" | "fade_in" | "fade_out" | "transition" | "crop" | "rotate" | "flip">>): Clip[] {
+export function setProps(clips: Clip[], idx: number, patch: Partial<Pick<Clip, "speed" | "volume" | "fade_in" | "fade_out" | "transition" | "crop" | "rotate" | "flip" | "color" | "motion">>): Clip[] {
   const next = [...clips];
   const c = { ...clips[idx], ...patch };
   if (patch.speed !== undefined) c.speed = Math.min(MAX_SPEED, Math.max(MIN_SPEED, patch.speed));

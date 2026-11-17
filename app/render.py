@@ -25,14 +25,38 @@ def _ts_ass(t: float) -> str:
     return f"{cs // 360000}:{cs // 6000 % 60:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}"
 
 
+SUB_HOLD = 0.1   # seconds a dubbed line stays on screen after its voice stops
+
+
 def _sub_times(segs, i, duration):
-    """Show each line from its start until its speech ends (at least the original end)."""
+    """Show each line while its voice speaks (the dub clip starts at the line's start); a line without a voice
+    keeps the original timing. Never past the next line's start."""
     s = segs[i]
-    end = s["end"]
-    if s.get("tts"):
-        end = max(end, s["start"] + s["tts"]["secs"])
+    end = s["start"] + s["tts"]["secs"] + SUB_HOLD if s.get("tts") else s["end"]
     nxt = segs[i + 1]["start"] if i + 1 < len(segs) else duration
     return s["start"], max(s["start"] + 0.3, min(end, nxt)) if nxt > s["start"] else end
+
+
+def snap_cues(cues: list[tuple[str, float, float]], s: dict, min_cue: float = 0.4,
+              max_shift: float = 0.6) -> list[tuple[str, float, float]]:
+    """split_cues shares the time out by letters; the voice does not read at an even pace. Move each change of
+    cue to the breath the voice takes there (the longest pause near the estimate), else keep the estimate."""
+    ps = s.get("_pauses")
+    if len(cues) < 2 or not ps:
+        return cues
+    marks = [(s["start"] + (p0 + p1) / 2, p1 - p0) for p0, p1 in ps]
+    bounds = [c[2] for c in cues[:-1]]
+    end = cues[-1][2]
+    lo = cues[0][1]
+    for k, t in enumerate(bounds):
+        win = min(max_shift, 0.4 * min(t - cues[k][1], cues[k + 1][2] - t))
+        hi = (bounds[k + 1] if k + 1 < len(bounds) else end) - min_cue
+        near = [(ln, -abs(m - t), m) for m, ln in marks if abs(m - t) <= win and lo + min_cue <= m <= hi]
+        if near:
+            bounds[k] = round(max(near)[2], 3)
+        lo = bounds[k]
+    starts = [cues[0][1]] + bounds
+    return [(c[0], starts[k], bounds[k] if k < len(bounds) else end) for k, c in enumerate(cues)]
 
 
 _BREAK = re.compile(r"(?<=[.,;:!?…，。！？；：、])\s*")
@@ -102,7 +126,7 @@ def write_srt(segs, duration, path: Path) -> None:
         if not s["vi"].strip():
             continue
         a, b = _sub_times(segs, i, duration)
-        for text, ca, cb in split_cues(s["vi"], a, b, 42):
+        for text, ca, cb in snap_cues(split_cues(s["vi"], a, b, 42), s):
             n += 1
             lines += [str(n), f"{_ts_srt(ca)} --> {_ts_srt(cb)}", text, ""]
     path.write_text("\n".join(lines), "utf-8")
@@ -210,9 +234,8 @@ def logo_text_style(st: dict, W: int, H: int) -> tuple[str, str] | None:
     return style, f"Dialogue: 1,0:00:00.00,9:59:59.00,Logo,,0,0,0,,{pos}{_clean(lg['text'])}"
 
 
-def write_ass(segs, duration, media, st, path: Path, offset: float = 0.0, window: float | None = None,
-              subs: bool = True, only_at: float | None = None, overlays: list[dict] | None = None) -> None:
-    """Burned-in subtitles (+ the channel-name watermark). only_at: a single line for a still preview."""
+def sub_look(media: dict, st: dict) -> dict:
+    """Everything that decides how the burned-in subtitles look and where lines break, on the output canvas."""
     g = frame.geom(media, st["frame"])
     W, H = g["W"], g["H"]
     size, margin = sub_layout(media, st)
@@ -222,15 +245,40 @@ def write_ass(segs, duration, media, st, path: Path, offset: float = 0.0, window
         edge_w, shadow = max(4, size // 4), 0  # box padding
     else:
         edge_w, shadow = max(2, size // 14), 1
-    styles = [f"Style: Default,{sub_font(st['target'])},{size},{sty['text']},&H000000FF,{sty['edge']},&H64000000,-1,0,0,0,"
-              f"100,100,0,0,{sty['border']},{edge_w},{shadow},2,{side},{side},{margin},1"]
     cjk = target_info(st["target"])["cjk"]
-    per_line = max(6, int((W - 2 * side - 2 * edge_w) / (size * 1.08)))
-    cue_chars = max(12, int((W - 2 * side) / (size * 0.52)))   # letters per line for scripts with spaces
+    return {"W": W, "H": H, "size": size, "margin": margin, "sty": sty, "side": side, "edge_w": edge_w,
+            "shadow": shadow, "cjk": cjk,
+            "per_line": max(6, int((W - 2 * side - 2 * edge_w) / (size * 1.08))),
+            "cue_chars": max(12, int((W - 2 * side) / (size * 0.52)))}   # letters per line for scripts with spaces
 
-    def line_text(raw: str) -> str:
-        t = _clean(raw)
-        return _wrap_cjk(t, per_line) if cjk else t
+
+def sub_cues(segs, duration, lk: dict) -> list[tuple[float, float, str]]:
+    """(from, to, text) of every subtitle on screen, in the times of `segs`. Text uses \\N for a forced break."""
+    out = []
+    for i, s in enumerate(segs):
+        if not _clean(s["vi"]):
+            continue
+        a0, b0 = _sub_times(segs, i, duration)
+        for cue, ca, cb in snap_cues(split_cues(_clean(s["vi"]), a0, b0, lk["per_line"] if lk["cjk"] else lk["cue_chars"]), s):
+            t = _clean(cue)
+            out.append((ca, cb, _wrap_cjk(t, lk["per_line"]) if lk["cjk"] else t))
+    return out
+
+
+def ass_rgba(c: str) -> str:
+    """&HAABBGGRR -> CSS rgba()."""
+    v = c[2:].rjust(8, "0")
+    a, b, g, r = (int(v[k:k + 2], 16) for k in (0, 2, 4, 6))
+    return f"rgba({r},{g},{b},{(255 - a) / 255:.2f})"
+
+
+def write_ass(segs, duration, media, st, path: Path, offset: float = 0.0, window: float | None = None,
+              subs: bool = True, only_at: float | None = None, overlays: list[dict] | None = None) -> None:
+    """Burned-in subtitles (+ the channel-name watermark). only_at: a single line for a still preview."""
+    lk = sub_look(media, st)
+    W, H, size, sty, side, edge_w = lk["W"], lk["H"], lk["size"], lk["sty"], lk["side"], lk["edge_w"]
+    styles = [f"Style: Default,{sub_font(st['target'])},{size},{sty['text']},&H000000FF,{sty['edge']},&H64000000,-1,0,0,0,"
+              f"100,100,0,0,{sty['border']},{edge_w},{lk['shadow']},2,{side},{side},{lk['margin']},1"]
 
     rows = []
     logo = logo_text_style(st, W, H)
@@ -250,24 +298,22 @@ def write_ass(segs, duration, media, st, path: Path, offset: float = 0.0, window
         if any("\u2e80" <= ch <= "\u9fff" or "\uac00" <= ch <= "\ud7af" for ch in text):  # no spaces to break at
             text = _wrap_cjk(text, max(4, int(W * 0.9 / (fs * 1.08))))
         pad = max(4, fs // 5)
+        fad = int(o.get("fade", 0) * 1000)
         tags = (f"{{\\an5\\pos({int(W * o['x'])},{int(H * o['y'])})\\fs{fs}\\b{1 if o.get('bold', True) else 0}"
-                f"\\1c{ov.ass_color(o['color'])}\\bord{pad if o.get('box') else max(2, fs // 14)}}}")
+                + (f"\\fad({fad},{fad})" if fad else "")
+                + f"\\1c{ov.ass_color(o['color'])}\\bord{pad if o.get('box') else max(2, fs // 14)}}}")
         rows.append(f"Dialogue: 2,{_ts_ass(span[0])},{_ts_ass(span[1])},{'OverBox' if o.get('box') else 'Over'},,0,0,0,,{tags}{text}")
     if subs and only_at is not None:
-        lines = [s for s in segs if s["vi"].strip()]
-        if lines:  # the line on screen at that moment, else the nearest one
-            best = min(lines, key=lambda s: 0 if s["start"] <= only_at <= s["end"] else abs(s["start"] - only_at))
-            rows.append(f"Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{line_text(best['vi'])}")
+        cues = sub_cues(segs, duration, lk)
+        if cues:  # the subtitle on screen at that moment (as the export cuts it), else the nearest one
+            best = min(cues, key=lambda c: 0 if c[0] <= only_at < c[1] else min(abs(c[0] - only_at), abs(c[1] - only_at)))
+            rows.append(f"Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{best[2]}")
     elif subs:
-        for i, s in enumerate(segs):
-            if not _clean(s["vi"]):
+        for ca, cb, text in sub_cues(segs, duration, lk):
+            a, b = ca - offset, cb - offset
+            if b <= 0 or (window is not None and a >= window):
                 continue
-            a0, b0 = _sub_times(segs, i, duration)
-            for cue, ca, cb in split_cues(_clean(s["vi"]), a0, b0, per_line if cjk else cue_chars):
-                a, b = ca - offset, cb - offset
-                if b <= 0 or (window is not None and a >= window):
-                    continue
-                rows.append(f"Dialogue: 0,{_ts_ass(max(0, a))},{_ts_ass(b)},Default,,0,0,0,,{line_text(cue)}")
+            rows.append(f"Dialogue: 0,{_ts_ass(max(0, a))},{_ts_ass(b)},Default,,0,0,0,,{text}")
     path.write_text(_ass_head(W, H, styles) + "\n".join(rows) + "\n", "utf-8")
 
 
@@ -297,6 +343,12 @@ def color_active(c: dict) -> bool:
 def color_filter(c: dict, v_in: str, v_out: str) -> str:
     """Brightness / contrast / saturation / warmth / sharpness / vignette as one ffmpeg filter chain.
     The web page shows a rough live preview of the same numbers (web/lib/color.ts); the still preview is exact."""
+    return f"{v_in}{','.join(color_parts(c))}{v_out}"
+
+
+def color_parts(c: dict) -> list[str]:
+    """The filters of color_filter, without labels (a clip on the timeline gets them in its own chain)."""
+    c = {k: c.get(k) or 0 for k in ("brightness", "contrast", "saturation", "temperature", "sharpness", "vignette")}
     parts = []
     if c["brightness"] or c["contrast"] or c["saturation"]:
         parts.append(f"eq=brightness={c['brightness'] / 100 * 0.2:.3f}:contrast={1 + c['contrast'] / 100 * 0.7:.3f}"
@@ -309,7 +361,7 @@ def color_filter(c: dict, v_in: str, v_out: str) -> str:
         parts.append(f"unsharp=5:5:{c['sharpness'] / 100 * 1.5:.2f}:5:5:0")
     if c["vignette"]:
         parts.append(f"vignette=angle={c['vignette'] / 100 * 1.5708:.3f}")
-    return f"{v_in}{','.join(parts)}{v_out}"
+    return parts
 
 
 _FILTERS: dict[str, bool] = {}
@@ -329,8 +381,19 @@ def has_filter(name: str) -> bool:
     return name in _FILTERS
 
 
-def video_chain(proj: dict, ass: Path | None, cwd: Path, logo_in: str | None) -> tuple[list[str], str]:
-    """Mask the original subtitles -> reframe -> burn subtitles/watermark -> logo. Returns (filters, label)."""
+def bg_image_path(st: dict) -> Path | None:
+    """The picture behind the video when the frame's background is "image"."""
+    from . import logos
+
+    fr = st["frame"]
+    item = logos.get(fr.get("bg_image")) if fr.get("bg") == "image" and fr.get("bg_image") else None
+    return logos.path(item) if item and logos.path(item).exists() else None
+
+
+def video_chain(proj: dict, ass: Path | None, cwd: Path, logo_in: str | None, bg_in: str | None = None,
+                offset: float = 0.0, window: float | None = None) -> tuple[list[str], str]:
+    """Mask the original subtitles -> reframe -> colour -> blurred areas -> burn subtitles/watermark -> logo.
+    offset/window: the part of the video being made (a preview), for things that come and go. Returns (filters, label)."""
     st, media = proj["settings"], proj["media"]
     chain, v = [], "[0:v]"
     if media.get("hdr") and has_filter("zscale") and has_filter("tonemap"):   # HDR phone video -> normal colours
@@ -342,11 +405,15 @@ def video_chain(proj: dict, ass: Path | None, cwd: Path, logo_in: str | None) ->
         v = "[vm]"
     g = frame.geom(media, st["frame"])
     if g["active"]:
-        chain.append(frame.video_filter(g, v, "[vf]"))
+        chain.append(frame.video_filter(g, v, "[vf]", st["frame"], bg_in))
         v = "[vf]"
     if color_active(st["color"]):  # after reframing (cheaper, and the blurred background gets it too), before text
         chain.append(color_filter(st["color"], v, "[vc]"))
         v = "[vc]"
+    regions = [o for o in (proj.get("overlays") or []) if o["kind"] == "blur"]
+    if regions:   # before the subtitles and texts, so those stay sharp
+        parts, v = ov.blur_filters(regions, v, g["W"], g["H"], offset, window)
+        chain += parts
     if ass:
         chain.append(f"{v}subtitles=filename={ass.name}:fontsdir={fonts_rel(cwd)}[vs]")
         v = "[vs]"
@@ -363,13 +430,19 @@ def still(proj_dir: Path, proj: dict, t: float, out: Path, width: int | None = N
     ass = None
     if st["subtitle_mode"] == "burn" or logo_text_style(st, 2, 2):
         ass = proj_dir / "still.ass"
-        write_ass(proj["segments"], proj["media"]["duration"], proj["media"], st, ass,
+        from .dub import with_pauses   # the cue on screen at t, cut where the voice breathes, as in the export
+        segs = with_pauses(proj_dir, [s for s in proj["segments"] if s.get("src_id", 0) == 0])
+        write_ass(segs, proj["media"]["duration"], proj["media"], st, ass,
                   subs=st["subtitle_mode"] == "burn", only_at=t)
     cmd = [FFMPEG, "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", str(src)]
     lp = logo_path(st)
     if lp:
         cmd += ["-i", str(lp)]
-    chain, v = video_chain(proj, ass, proj_dir, "[1:v]" if lp else None)
+    bgp = bg_image_path(st)
+    if bgp:
+        cmd += ["-i", str(bgp)]
+    chain, v = video_chain(proj, ass, proj_dir, "[1:v]" if lp else None, f"[{2 if lp else 1}:v]" if bgp else None,
+                           offset=t, window=0.05)
     if width:
         chain.append(f"{v}scale={width}:-2[vw]")
         v = "[vw]"
@@ -446,7 +519,8 @@ def music_path(proj: dict) -> Path | None:
 def build_filters(proj_dir: Path, proj: dict, bg_label: str | None, start: float, length: float | None,
                   music_label: str | None = None, logo_label: str | None = None,
                   overlay_imgs: list[tuple[str, dict]] | None = None,
-                  overlay_vids: list[tuple[str, dict, float, float, bool]] | None = None) -> str:
+                  overlay_vids: list[tuple[str, dict, float, float, bool]] | None = None,
+                  bg_img_label: str | None = None) -> str:
     st, media = proj["settings"], proj["media"]
     ass = None
     over = proj.get("overlays") or []
@@ -454,7 +528,8 @@ def build_filters(proj_dir: Path, proj: dict, bg_label: str | None, start: float
         ass = proj_dir / ("subs_preview.ass" if length else "subs.ass")
         write_ass(proj["segments"], media["duration"], media, st, ass, offset=start, window=length,
                   subs=st["subtitle_mode"] == "burn", overlays=over)
-    chain, v = video_chain(proj, ass, proj_dir, f"[{logo_label}]" if logo_label else None)
+    chain, v = video_chain(proj, ass, proj_dir, f"[{logo_label}]" if logo_label else None,
+                           f"[{bg_img_label}]" if bg_img_label else None, offset=start, window=length)
     if overlay_imgs:
         g = frame.geom(media, st["frame"])
         parts, v = ov.image_filters(overlay_imgs, v, g["W"], g["H"], start, length)
@@ -594,6 +669,11 @@ def render(proj_dir: Path, proj: dict, out: Path, bg: Path | None,
     if lp:
         logo_label = f"{sum(1 for x in cmd if x == '-i')}:v"
         cmd += ["-i", str(lp)]
+    bg_img_label = None
+    bgp = bg_image_path(proj["settings"])
+    if bgp:
+        bg_img_label = f"{sum(1 for x in cmd if x == '-i')}:v"
+        cmd += ["-i", str(bgp)]
     overlay_imgs = []
     from . import logos
     for o in proj.get("overlays") or []:
@@ -617,7 +697,8 @@ def render(proj_dir: Path, proj: dict, out: Path, bg: Path | None,
         has_audio = bool(media.get("has_audio", True)) if o["src"] == 0 else bool(extras[o["src"]].get("has_audio", True))
         overlay_vids.append((f"{sum(1 for x in cmd if x == '-i')}", o, span[0], span[1], has_audio))
         cmd += ["-ss", f"{o['from'] + skip:.3f}", "-t", f"{span[1] - span[0]:.3f}", "-i", str(path)]
-    filters = build_filters(proj_dir, proj, bg_label, start, length, music_label, logo_label, overlay_imgs, overlay_vids)
+    filters = build_filters(proj_dir, proj, bg_label, start, length, music_label, logo_label, overlay_imgs, overlay_vids,
+                            bg_img_label)
     cmd += ["-filter_complex", filters, "-map", "[vout]", "-map", "[aout]"]
     cmd += ["-t", f"{(length or media['duration']):.3f}"]
     cmd += [*video_encoder(proj["settings"].get("export") or {}, bool(length), media),

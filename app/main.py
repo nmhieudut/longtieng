@@ -14,7 +14,7 @@ from . import dub, jobs, logos, media, music, ocr, outdir, overlays, publish, qc
 from .frame import ASPECTS
 from .media import MediaError
 from .config import (
-    APP_VERSION, DATA_DIR, DEFAULT_SETTINGS, FFMPEG, FROZEN, MAX_DURATION_MIN, MAX_UPLOAD_MB, OPENAI_MODEL, USER_DIR, VOICES, WEB_DIR,
+    APP_VERSION, DATA_DIR, DEFAULT_SETTINGS, FFMPEG, FROZEN, MAX_DURATION_MIN, MAX_UPLOAD_MB, OPENAI_MODEL, GPT_MODELS, gpt_model, USER_DIR, VOICES, WEB_DIR,
     SOURCE_LANGS, TARGET_LANGS, demucs_available, default_voice, openai_key, save_user_settings, voice_ok,
 )
 
@@ -114,7 +114,7 @@ def _check_settings(s: dict, new: bool = False) -> dict:
     if isinstance(m, dict) and "style" in m and m["style"] not in {"blur", "box"}:
         raise HTTPException(400, "Kiểu che phụ đề không hợp lệ.")
     mu = s.get("music")
-    nested = {("frame", "aspect"): {"original", *ASPECTS}, ("frame", "fit"): {"blur", "crop"},
+    nested = {("frame", "aspect"): {"original", *ASPECTS}, ("frame", "fit"): {"blur", "crop"}, ("frame", "bg"): {"blur", "color", "image"},
               ("logo", "position"): {"tl", "tr", "bl", "br"},
               ("export", "quality"): {"fast", "balanced", "high"}, ("script", "mode"): {"translate", "review"}, ("script", "style"): set(translate.REVIEW_STYLES)}
     for (k, f), allowed in nested.items():
@@ -122,6 +122,9 @@ def _check_settings(s: dict, new: bool = False) -> dict:
             raise HTTPException(400, f"Giá trị không hợp lệ cho {k}.{f}: {s[k][f]!r}")
     if "sub_style" in s and s["sub_style"] not in render.SUB_STYLES:
         raise HTTPException(400, "Kiểu phụ đề không hợp lệ.")
+    fr = s.get("frame")
+    if isinstance(fr, dict) and fr.get("bg_image") and not logos.get(str(fr["bg_image"])):
+        fr["bg_image"] = None   # deleted from the library: back to the blurred background, never lock the settings
     lg = s.get("logo")
     if isinstance(lg, dict) and lg.get("image") and not logos.get(str(lg["image"])):
         raise HTTPException(400, "Logo không còn trong thư viện.")
@@ -155,7 +158,7 @@ def config():
         "defaults": store.new_settings({}),
         "max_upload_mb": MAX_UPLOAD_MB,
         "max_duration_min": MAX_DURATION_MIN,
-        "translator": f"OpenAI ({OPENAI_MODEL})" if openai_key() else "Google Dịch (chưa nhập OpenAI API key)",
+        "translator": f"OpenAI ({gpt_model()})" if openai_key() else "Google Dịch (chưa nhập OpenAI API key)",
         "features": {"demucs": demucs_available(), "hw_encoder": render.hw_encoder_available()},
         "langs": {k: v["label"] for k, v in SOURCE_LANGS.items()},
         "target_langs": {k: {"label": v["label"], "voice": v["voice"]} for k, v in TARGET_LANGS.items()},
@@ -177,6 +180,8 @@ def app_settings():
     return {
         "openai_key_set": bool(k),
         "openai_key_hint": _mask_key(k),
+        "gpt_model": gpt_model(),
+        "gpt_models": [OPENAI_MODEL, *GPT_MODELS] if OPENAI_MODEL not in GPT_MODELS else GPT_MODELS,
         "stt_engine": stt.engine_label(),
         "stt_model_ready": stt.model_cached(),
         "stt_cpu": stt.engine() == "faster",
@@ -231,6 +236,8 @@ def put_app_settings(body: dict = Body(...)):
                     raise HTTPException(502, "Không kết nối được OpenAI để kiểm tra key. Kiểm tra mạng rồi thử lại.")
                 raise HTTPException(400, f"OpenAI từ chối key ({name}).")
         save_user_settings({"openai_key": k})
+    if body.get("gpt_model") in (OPENAI_MODEL, *GPT_MODELS):
+        save_user_settings({"gpt_model": body["gpt_model"]})
     if body.get("stt_model") in ("auto", *stt.FW_CHAIN):
         save_user_settings({"stt_model": body["stt_model"], "stt_auto": None} if body["stt_model"] == "auto" else {"stt_model": body["stt_model"]})
     if isinstance(body.get("output_dir"), str):
@@ -642,6 +649,38 @@ def still_preview(pid: str, t: float = 0.0):
     return FileResponse(out, headers={"Cache-Control": "no-store"})
 
 
+@app.post("/api/projects/{pid}/cues")
+def sub_cues(pid: str, settings: dict | None = Body(None)):
+    """The burned-in subtitles exactly as the export will draw them (times in output time), for the live preview.
+    `settings`: the values being edited and not saved yet."""
+    p = _load(pid)
+    if not p.get("media"):
+        return {"cues": []}
+    st = store.clean_settings(p["settings"])
+    if isinstance(settings, dict):
+        try:
+            st = store.clean_settings(store._merge(st, settings))
+        except (TypeError, ValueError):
+            pass   # a half-typed value: show the saved look
+    if timeline.is_edited(p):
+        clips = timeline.clips_of(p)
+        segs, dur = timeline.map_segments(clips, p["segments"]), timeline.out_duration(clips)
+    else:
+        segs, dur = [s for s in p["segments"] if s.get("src_id", 0) == 0], p["media"]["duration"]
+    try:
+        lk = render.sub_look(p["media"], st)
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, "Cài đặt không hợp lệ.")
+    sty = lk["sty"]
+    cues = render.sub_cues(dub.with_pauses(store.pdir(pid), segs), dur, lk) if st.get("subtitle_mode") == "burn" else []
+    return {
+        "W": lk["W"], "H": lk["H"], "size": lk["size"], "margin": lk["margin"], "side": lk["side"], "edge": lk["edge_w"],
+        "box": sty["border"] == 3, "text": render.ass_rgba(sty["text"]), "edge_color": render.ass_rgba(sty["edge"]),
+        "font": render.sub_font(st["target"]),
+        "cues": [{"a": round(a, 3), "b": round(b, 3), "t": t.replace("\\N", "\n")} for a, b, t in cues],
+    }
+
+
 @app.post("/api/projects/{pid}/rewrite")
 def rewrite(pid: str):
     p = _load(pid)
@@ -813,6 +852,41 @@ def _add_clip(p: dict, entry: dict, index: int = -1) -> list[dict]:
     clips = clips[:at] + [new] + clips[at:]
     durs = timeline.source_durations(p) | {entry["id"]: entry["duration"]}
     return timeline.validate(clips, p["media"]["duration"], durs, MAX_DURATION_MIN * 60)
+
+
+@app.post("/api/projects/{pid}/freeze")
+def freeze_frame(pid: str, body: dict = Body(...)):
+    """Dừng hình: the frame at second `t` of video `src` becomes a photo of the project (the page then puts it on
+    the timeline where the playhead is, like any photo)."""
+    p = _load(pid)
+    _not_busy(pid)
+    try:
+        src, t = int(body.get("src", 0)), max(0.0, float(body.get("t", 0)))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Vị trí không hợp lệ.")
+    d = store.pdir(pid)
+    try:
+        path = timeline.source_path(d, p, src)
+    except MediaError as e:
+        raise HTTPException(400, str(e))
+    extras = timeline.extra_sources(p)
+    if len(extras) >= MAX_EXTRA_SOURCES:
+        raise HTTPException(400, f"Tối đa {MAX_EXTRA_SOURCES} video và ảnh thêm vào một dự án.")
+    n = max([e["id"] for e in extras] + [0]) + 1
+    dst = d / f"source_{n}.jpg"
+    try:
+        media.run([FFMPEG, "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", str(path), "-frames:v", "1", "-q:v", "2", str(dst)],
+                  timeout=30)
+        if not dst.exists():
+            raise MediaError("Không lấy được khung hình ở chỗ này.")
+        info = media.probe(dst)
+    except (MediaError, OSError) as e:
+        dst.unlink(missing_ok=True)
+        raise HTTPException(400, str(e))
+    entry = {"id": n, "file": dst.name, "name": f"Dừng hình {int(t // 60)}:{int(t % 60):02d}", "duration": MAX_IMAGE_SECONDS,
+             "width": info["width"], "height": info["height"], "has_audio": False, "kind": "image", "default_len": 2.0}
+    store.update(pid, lambda q: q.__setitem__("extra_sources", timeline.extra_sources(q) + [entry]))
+    return _view(store.load(pid))
 
 
 @app.post("/api/projects/{pid}/sources")

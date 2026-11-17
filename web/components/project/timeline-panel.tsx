@@ -1,17 +1,19 @@
 "use client";
 
-import { AudioLines, Copy, Crop as CropIcon, FlipHorizontal, Gauge, Layers, SquareDashed, HelpCircle, ImagePlus, Loader2, Redo2, RotateCcw, RotateCw, Scissors, Trash2, Type, Undo2, Video, Volume2, ZoomIn } from "lucide-react";
+import { ArrowLeftToLine, ArrowRightToLine, AudioLines, Copy, Droplets, Crop as CropIcon, FlipHorizontal, Gauge, Layers, SquareDashed, HelpCircle, ImagePlus, Loader2, Redo2, RotateCcw, RotateCw, Scissors, Trash2, Type, Undo2, Video, Volume2, VolumeX, SlidersHorizontal, ZoomIn, Palette, Snowflake, Move } from "lucide-react";
 import { type Ref, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { IconButton } from "@/components/ui/icon-button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { addSource, api, fileUrl, isActive, type MusicTrack, type Overlay, type Project, type Settings } from "@/lib/api";
-import { type Clip, type Crop, clock, GAP, isGap, MAX_GAP, duplicateAt, full, layout, len, mapLines, MAX_SPEED, MIN_CLIP, MIN_SPEED, moveClip, removeAt, setProps, spd, splitAt, srcOf, totalLen, trans, trimEdge, uid } from "@/lib/timeline";
+import { type Clip, type Crop, clock, GAP, isGap, MAX_GAP, duplicateAt, full, layout, len, mapLines, MAX_SPEED, MIN_CLIP, MIN_SPEED, moveClip, locate, removeAt, setProps, spd, splitAt, srcOf, totalLen, trans, trimAt, trimEdge, uid } from "@/lib/timeline";
+import { clipColor, COLOR_PRESETS, type Color, packColor, sameColor } from "@/lib/color";
 import { cn } from "@/lib/utils";
 
 import { SilenceDialog } from "./silence-dialog";
@@ -47,6 +49,7 @@ type Props = {
   setSelOv: (id: string | null) => void;
   inspectorHost: HTMLElement | null;   // where the properties of what is selected are drawn (the right-hand panel)
   onInspect: () => void;               // something was selected: show that panel
+  onEditLine: (sid: number, focus: boolean) => void;   // a dubbed line was clicked (focus: double-click, type in it)
   cropMode: boolean;                   // the crop frame is on the video
   onCropMode: (on: boolean) => void;
   handle?: Ref<TimelineHandle>;
@@ -68,7 +71,7 @@ export type TimelineHandle = {
   addLayer: (src: number) => void;                                 // ... or over the picture
 };
 
-export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusic, idx, T, playing, showPlayhead, disabled, onSeekOut, onSelectClip, onTogglePlay, onApply, selOv, setSelOv, inspectorHost, onInspect, cropMode, onCropMode, handle }: Props) {
+export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusic, idx, T, playing, showPlayhead, disabled, onSeekOut, onSelectClip, onTogglePlay, onApply, selOv, setSelOv, inspectorHost, onInspect, onEditLine, cropMode, onCropMode, handle }: Props) {
   const duration = p.media?.duration ?? 0;
   const { clips, commit, tweak, undo, redo } = tl;
   const rows = useMemo(() => layout(clips), [clips]);
@@ -135,10 +138,75 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
 
   // ---- operations
   const cut = () => {
+    if (selectedOv) { splitOverlay(); return; }
     const r = splitAt(clips, T);
     if (!r) { toast.info("Đưa đường chỉ vị trí vào giữa một đoạn (cách mép ít nhất 0,2 giây) rồi bấm Cắt đôi."); return; }
     commit(r.clips);
     setSelected(r.idx);
+  };
+
+  /** Q / W: drop what is before / after the playhead in the clip under it (the playhead stays on the cut). */
+  /** The playhead is inside clip i (a menu or the bar acts on that clip, not on whatever is under the playhead). */
+  const headIn = (i: number) => {
+    const r = rows[i];
+    if (r && T > r.at + MIN_CLIP / 2 && T < r.at + len(r.clip) - MIN_CLIP / 2) return true;
+    toast.info(`Đưa đường chỉ vào trong đoạn ${i + 1} trước (bấm vào thước thời gian phía trên).`);
+    return false;
+  };
+  const trimSide = (side: "left" | "right", i?: number) => {
+    if (i !== undefined && !headIn(i)) return;
+    const r = trimAt(clips, T, side);
+    if (!r) { toast.info("Đưa đường chỉ vào giữa một đoạn (cách mép ít nhất 0,2 giây)."); return; }
+    commit(r.clips);
+    setSelected(r.idx);
+    if (side === "left") onSeekOut(layout(r.clips)[r.idx].at);
+  };
+  /** A text, sticker or video layer cut in two at the playhead (S while it is selected). */
+  const splitOverlay = () => {
+    const o = selectedOv;
+    if (!o) return;
+    if (T - o.start < MIN_CLIP || o.end - T < MIN_CLIP) { toast.info("Đưa đường chỉ vào giữa chữ / hình đang chọn rồi bấm Cắt."); return; }
+    const at = +T.toFixed(2);
+    const b: Overlay = { ...o, id: uid(), start: at, ...(o.kind === "video" ? { from: +((o.from ?? 0) + (at - o.start)).toFixed(2) } : {}) };
+    overlays.change(ovItems.flatMap((x) => (x.id === o.id ? [{ ...o, end: at }, b] : [x])), { now: true });
+    setSelOv(b.id);
+  };
+  const turn = (i: number) => tw(setProps(clips, i, { rotate: (((clips[i].rotate ?? 0) + 90) % 360) as 0 | 90 | 180 | 270 }), `rot${i}`);
+  const mirror = (i: number) => tw(setProps(clips, i, { flip: !clips[i].flip }), `flip${i}`);
+  /** Dừng hình: the frame under the playhead held for 2 seconds, put in at the playhead (the clip is cut there). */
+  const [freezing, setFreezing] = useState(false);
+  const freeze = async (i?: number) => {
+    if (i !== undefined && !headIn(i)) return;
+    const { idx, src } = locate(clips, T);
+    const c = clips[idx];
+    if (!c || isGap(c) || srcInfo(srcOf(c)).image) { toast.info("Dừng hình dùng cho đoạn video: đưa đường chỉ vào một đoạn video."); return; }
+    setFreezing(true);
+    try {
+      const q = await api.freeze(p.id, srcOf(c), src);
+      onApply(q);
+      const id = Math.max(...(q.extra_sources ?? []).map((e) => e.id));
+      const r = splitAt(clips, T);
+      const base = r ? r.clips : clips;
+      const at = r ? r.idx : src - c.start < MIN_CLIP ? idx : idx + 1;
+      const next = [...base];
+      // the still keeps how the clip is cropped, turned and coloured
+      next.splice(at, 0, { id: uid(), src: id, start: 0, end: 2, crop: c.crop, rotate: c.rotate, flip: c.flip, color: c.color });
+      commit(next);
+      setSelected(at);
+      toast.success("Đã dừng hình 2 giây. Kéo mép đoạn để đổi độ dài.");
+    } catch (e) { toast.error((e as Error).message); }
+    finally { setFreezing(false); }
+  };
+  const colorClip = (i: number, c: Color, key = `color${i}`) => tw(setProps(clips, i, { color: packColor(c) }), key);
+  const muteClip = (i: number) => commit(setProps(clips, i, { volume: (clips[i].volume ?? 1) === 0 ? 1 : 0 }));
+  const speedClip = (i: number, v: number) => commit(setProps(clips, i, { speed: v }));
+  const cropClip = (i: number) => {   // the crop frame works on the clip under the playhead: go into this one first
+    const r = rows[i];
+    if (r && !(T >= r.at && T < r.at + len(r.clip))) onSeekOut(r.at + Math.min(0.05, len(r.clip) / 2));
+    setSelected(i);
+    onSelectClip(i);
+    onCropMode(true);
+    onInspect();
   };
 
   const del = () => {
@@ -186,12 +254,13 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
   const nLanes = Math.max(1, ...overlayLanes(ovItems).map((l) => l + 1));
   const tracksH = RULER_H + TRACK_H + LINES_H + OVERLAY_H * nLanes + MUSIC_H;
   const selectedOv = ovItems.find((o) => o.id === selOv) ?? null;
-  const addOverlay = (kind: "text" | "image", image?: string) => {
+  const addOverlay = (kind: "text" | "image" | "blur", image?: string) => {
     const start = Math.min(showPlayhead ? T : 0, Math.max(0, total - MIN_CLIP));
     const o: Overlay = {
-      id: Math.random().toString(36).slice(2, 8), kind, start: +start.toFixed(2), end: +Math.min(total, start + 3).toFixed(2),
-      x: 0.5, y: kind === "text" ? 0.2 : 0.35, size: kind === "text" ? 0.07 : 0.25,
-      ...(kind === "text" ? { text: "Nhập chữ ở đây", color: "#ffffff", box: false, bold: true } : { image }),
+      id: uid(), kind, start: +start.toFixed(2), end: +Math.min(total, start + 3).toFixed(2),
+      x: 0.5, y: kind === "text" ? 0.2 : 0.35, size: kind === "text" ? 0.07 : kind === "blur" ? 0.3 : 0.25,
+      ...(kind === "text" ? { text: "Nhập chữ ở đây", color: "#ffffff", box: false, bold: true }
+        : kind === "blur" ? { h: 0.15, strength: 50, style: "blur" as const } : { image }),
     }; overlays.change([...ovItems, o], { now: true });
     setSelOv(o.id);
     onInspect();
@@ -323,8 +392,8 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
   const reset = () => { commit(full(duration)); setSelected(0); };
 
   // ---- keyboard (not while typing in a box). The listener is set up once and calls the latest handlers.
-  const act = useRef({ cut, del, dup, undo: doUndo, redo: doRedo, onTogglePlay, copy: copyOverlay, paste: pasteOverlay, nudge, deselect: () => setSelOv(null), hasOv: false, seek: (d: number): void => { void d; }, to: (t: number): void => { void t; }, zoomBy: (f: number): void => { void f; } });
-  useEffect(() => { act.current = { cut, del, dup, undo: doUndo, redo: doRedo, onTogglePlay, copy: copyOverlay, paste: pasteOverlay, nudge, deselect: () => setSelOv(null), hasOv: !!selectedOv,
+  const act = useRef({ trimSide, cut, del, dup, undo: doUndo, redo: doRedo, onTogglePlay, copy: copyOverlay, paste: pasteOverlay, nudge, deselect: () => setSelOv(null), hasOv: false, seek: (d: number): void => { void d; }, to: (t: number): void => { void t; }, zoomBy: (f: number): void => { void f; } });
+  useEffect(() => { act.current = { trimSide, cut, del, dup, undo: doUndo, redo: doRedo, onTogglePlay, copy: copyOverlay, paste: pasteOverlay, nudge, deselect: () => setSelOv(null), hasOv: !!selectedOv,
       seek: (d: number) => onSeekOut(Math.min(Math.max(T + d, 0), total)), to: (t: number) => onSeekOut(Math.min(Math.max(t, 0), total)),
       zoomBy: (f: number) => setZoom((z) => Math.min(12, Math.max(1, z * f))) }; });
   useEffect(() => {
@@ -360,6 +429,8 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
       else if (e.key === "+" || e.key === "=") { e.preventDefault(); a.zoomBy(1.25); }
       else if (e.key === "-") { e.preventDefault(); a.zoomBy(1 / 1.25); }
       else if (e.key === "s" || e.key === "S") { e.preventDefault(); a.cut(); }
+      else if (e.key === "q" || e.key === "Q") { e.preventDefault(); a.trimSide("left"); }
+      else if (e.key === "w" || e.key === "W") { e.preventDefault(); a.trimSide("right"); }
       else if (e.key === "d" || e.key === "D") { e.preventDefault(); a.dup(); }
       else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); a.del(); }
       else if (e.key === " ") { e.preventDefault(); a.onTogglePlay(); }
@@ -497,6 +568,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
           }} />
         <ToolBtn disabled={disabled} label="Thêm chữ tại đường chỉ" hint="chữ hiện 3 giây" onClick={() => addOverlay("text")}><Type /></ToolBtn>
         <ToolBtn disabled={disabled} label="Thêm hình dán tại đường chỉ" hint="ảnh trong thư viện" onClick={addSticker}><ImagePlus /></ToolBtn>
+        <ToolBtn disabled={disabled} label="Làm mờ một vùng tại đường chỉ" hint="che mặt, biển số, logo cũ; kéo khung trên video" onClick={() => addOverlay("blur")}><Droplets /></ToolBtn>
         <span className="mx-1 h-5 w-px bg-border" />
         <ToolBtn disabled={disabled} label="Hoàn tác" hint="Ctrl/⌘ Z" onClick={doUndo} off={!tl.canUndo && !overlays.canUndo}><Undo2 /></ToolBtn>
         <ToolBtn disabled={disabled} label="Làm lại" hint="Ctrl/⌘ Shift Z" onClick={doRedo} off={!tl.canRedo && !overlays.canRedo}><Redo2 /></ToolBtn>
@@ -505,16 +577,59 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
           <ZoomIn className="size-4" />
           <Slider className="w-28" min={1} max={12} step={0.1} value={[zoom]} onValueChange={([v]) => setZoom(v)} aria-label="Phóng to timeline" />
         </span>
+        {/* what can be done with what is selected, without opening anything */}
+        <div className="flex w-full flex-wrap items-center gap-1.5 border-t pt-1.5" aria-label="Thao tác với mục đang chọn">
+          {selectedOv ? (
+            <>
+              <span className="mr-1 text-xs font-medium">{selectedOv.kind === "text" ? "Chữ" : selectedOv.kind === "video" ? "Video chồng" : selectedOv.kind === "blur" ? "Vùng làm mờ" : "Hình dán"} đang chọn</span>
+              <ToolBtn disabled={disabled} label="Cắt đôi tại đường chỉ" hint="S" onClick={splitOverlay}><Scissors /></ToolBtn>
+              <ToolBtn disabled={disabled} label="Nhân đôi" hint="Ctrl/⌘ D" onClick={() => pasteOverlay(selectedOv)}><Copy /></ToolBtn>
+              <ToolBtn disabled={disabled} label="Thuộc tính (màu, cỡ, thời gian…)" hint="" onClick={onInspect}><SlidersHorizontal /></ToolBtn>
+              <ToolBtn disabled={disabled} label="Xoá" hint="Delete" onClick={removeOverlay}><Trash2 /></ToolBtn>
+            </>
+          ) : clips[sel] && (
+            <>
+              <span className="mr-1 text-xs font-medium">{isGap(clips[sel]) ? "Khoảng trống" : `Đoạn ${sel + 1}/${clips.length}`} · <span className="font-mono">{clock(len(clips[sel]))}</span></span>
+              <ToolBtn disabled={disabled} label="Xoá phần trước đường chỉ" hint="Q" onClick={() => trimSide("left", sel)}><ArrowLeftToLine /></ToolBtn>
+              <ToolBtn disabled={disabled} label="Xoá phần sau đường chỉ" hint="W" onClick={() => trimSide("right", sel)}><ArrowRightToLine /></ToolBtn>
+              {!isGap(clips[sel]) && (
+                <>
+                  <ToolBtn disabled={disabled} label={cropMode ? "Xong cắt xén" : "Cắt xén khung hình"} hint="kéo khung trên video" onClick={() => (cropMode ? onCropMode(false) : cropClip(sel))}><CropIcon /></ToolBtn>
+                  {!srcInfo(srcOf(clips[sel])).image && (
+                    <ToolBtn disabled={disabled || freezing} label="Dừng hình 2 giây tại đường chỉ" hint="giữ khung hình đứng yên" onClick={() => freeze(sel)}>{freezing ? <Loader2 className="animate-spin" /> : <Snowflake />}</ToolBtn>
+                  )}
+                  <ToolBtn disabled={disabled} label="Xoay 90°" hint="" onClick={() => turn(sel)}><RotateCw /></ToolBtn>
+                  <ToolBtn disabled={disabled} label="Lật ngang" hint="" onClick={() => mirror(sel)}><FlipHorizontal /></ToolBtn>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <span><IconButton label={`Tốc độ (${+spd(clips[sel]).toFixed(2)}×)`} variant="outline" disabled={disabled}><Gauge /></IconButton></span>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      {[0.5, 0.75, 1, 1.25, 1.5, 2, 3].map((v) => (
+                        <DropdownMenuItem key={v} onSelect={() => speedClip(sel, v)} className={cn(spd(clips[sel]) === v && "font-semibold text-primary")}>{v}×</DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  {!srcInfo(srcOf(clips[sel])).image && (
+                    <ToolBtn disabled={disabled} label={(clips[sel].volume ?? 1) === 0 ? "Bật tiếng gốc của đoạn" : "Tắt tiếng gốc của đoạn (giọng lồng vẫn đọc)"} hint=""
+                      onClick={() => muteClip(sel)}>{(clips[sel].volume ?? 1) === 0 ? <VolumeX /> : <Volume2 />}</ToolBtn>
+                  )}
+                </>
+              )}
+              <ToolBtn disabled={disabled} label="Thuộc tính (tốc độ, âm lượng, mờ dần, chuyển cảnh…)" hint="bấm đúp vào đoạn" onClick={onInspect}><SlidersHorizontal /></ToolBtn>
+            </>
+          )}
+        </div>
       </div>
 
       <p className="flex items-center gap-1 font-mono text-xs tabular-nums text-muted-foreground">
         <Tooltip>
           <TooltipTrigger asChild><button type="button" aria-label="Cách dùng timeline" className="mr-1 grid size-6 place-items-center rounded hover:bg-accent hover:text-foreground"><HelpCircle className="size-4" /></button></TooltipTrigger>
           <TooltipContent className="max-w-sm">
-            Bấm vào thanh hoặc kéo đường chỉ để chọn vị trí. Kéo hai mép một đoạn để cắt bớt, kéo cả đoạn sang cạnh để đổi thứ tự.
+            Bấm vào thanh hoặc kéo đường chỉ để chọn vị trí. Kéo hai mép một đoạn để cắt bớt, kéo cả đoạn sang cạnh để đổi thứ tự. Bấm chuột phải vào một đoạn để xem mọi thao tác. Bấm vào một câu để nhảy tới, bấm đúp để sửa lời.
             Các câu lồng tiếng nằm trong phần bị cắt sẽ tự bỏ, câu còn lại tự dời theo. Video gốc không bị đổi; bấm Xuất để ra bản đã cắt ghép.
             Đoạn ngắn nhất {MIN_CLIP} giây.
-            <span className="mt-1.5 block opacity-80">Phím tắt: Space/K phát · S cắt · D nhân đôi · Delete xoá · ← → một khung hình (Shift: một giây) · J/L lùi/tiến 5 giây · Home/End · +/− hoặc Ctrl/⌘ cuộn chuột để zoom · Ctrl/⌘ Z hoàn tác.</span>
+            <span className="mt-1.5 block opacity-80">Phím tắt: Space/K phát · S cắt (cả chữ / hình đang chọn) · Q / W xoá phần trước / sau đường chỉ · D nhân đôi · Delete xoá · ← → một khung hình (Shift: một giây) · J/L lùi/tiến 5 giây · Home/End · +/− hoặc Ctrl/⌘ cuộn chuột để zoom · Ctrl/⌘ Z hoàn tác.</span>
           </TooltipContent>
         </Tooltip>
         {clock(showPlayhead ? T : 0)} / {clock(total)}
@@ -558,7 +673,9 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
                 const w = len(clip) * pps;
                 const info = srcInfo(srcOf(clip));
                 return (
-                  <div key={clip.id} role="button" tabIndex={0} aria-label={`Đoạn ${i + 1}, ${clock(len(clip))}`}
+                  <ContextMenu key={clip.id} modal={false}>
+                  <ContextMenuTrigger asChild disabled={disabled}>
+                  <div role="button" tabIndex={0} aria-label={`Đoạn ${i + 1}, ${clock(len(clip))}`}
                     className={cn(
                       "group absolute top-0 overflow-hidden rounded-md border-2 bg-secondary text-left shadow-sm",
                       sel === i ? "border-primary" : "border-border",
@@ -575,6 +692,7 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
                     }}
                     onPointerDown={(e) => {
                       e.stopPropagation();
+                      if (e.button !== 0) { setSelected(i); setSelOv(null); setSelMusic(false); return; }   // right-click: the menu, the playhead stays
                       setSelected(i);
                       setSelOv(null);
                       setSelMusic(false);
@@ -607,6 +725,58 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
                         style={{ width: HANDLE_W }} />
                     ))}
                   </div>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <ContextMenuItem onSelect={() => { if (headIn(i)) cut(); }}><Scissors /> Cắt đôi tại đường chỉ<ContextMenuShortcut>S</ContextMenuShortcut></ContextMenuItem>
+                    <ContextMenuItem onSelect={() => trimSide("left", i)}><ArrowLeftToLine /> Xoá phần trước đường chỉ<ContextMenuShortcut>Q</ContextMenuShortcut></ContextMenuItem>
+                    <ContextMenuItem onSelect={() => trimSide("right", i)}><ArrowRightToLine /> Xoá phần sau đường chỉ<ContextMenuShortcut>W</ContextMenuShortcut></ContextMenuItem>
+                    <ContextMenuItem onSelect={() => { commit(duplicateAt(clips, i)); setSelected(i + 1); }}><Copy /> Nhân đôi<ContextMenuShortcut>D</ContextMenuShortcut></ContextMenuItem>
+                    {!isGap(clip) && (
+                      <>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem onSelect={() => cropClip(i)}><CropIcon /> Cắt xén khung hình…</ContextMenuItem>
+                        {!info.image && <ContextMenuItem onSelect={() => freeze(i)}><Snowflake /> Dừng hình 2 giây tại đường chỉ</ContextMenuItem>}
+                        <ContextMenuItem onSelect={() => turn(i)}><RotateCw /> Xoay 90°</ContextMenuItem>
+                        <ContextMenuItem onSelect={() => mirror(i)}><FlipHorizontal /> Lật ngang</ContextMenuItem>
+                        <ContextMenuSub>
+                          <ContextMenuSubTrigger><Gauge /> Tốc độ ({+spd(clip).toFixed(2)}×)</ContextMenuSubTrigger>
+                          <ContextMenuSubContent>
+                            {[0.5, 0.75, 1, 1.25, 1.5, 2, 3].map((v) => (
+                              <ContextMenuItem key={v} onSelect={() => speedClip(i, v)} className={cn(spd(clip) === v && "font-semibold text-primary")}>{v}×</ContextMenuItem>
+                            ))}
+                          </ContextMenuSubContent>
+                        </ContextMenuSub>
+                        <ContextMenuSub>
+                          <ContextMenuSubTrigger><Move /> Zoom chậm</ContextMenuSubTrigger>
+                          <ContextMenuSubContent>
+                            {([[undefined, "Không"], ["in", "Phóng vào"], ["out", "Thu ra"]] as const).map(([v, name]) => (
+                              <ContextMenuItem key={name} onSelect={() => commit(setProps(clips, i, { motion: v }))}
+                                className={cn(clip.motion === v && "font-semibold text-primary")}>{name}</ContextMenuItem>
+                            ))}
+                          </ContextMenuSubContent>
+                        </ContextMenuSub>
+                        <ContextMenuSub>
+                          <ContextMenuSubTrigger><Palette /> Bộ lọc màu của đoạn</ContextMenuSubTrigger>
+                          <ContextMenuSubContent>
+                            {COLOR_PRESETS.map((pr) => (
+                              <ContextMenuItem key={pr.id} onSelect={() => colorClip(i, pr.values, `colorpreset${i}${pr.id}`)}
+                                className={cn(sameColor(clipColor(clip.color), pr.values) && "font-semibold text-primary")}>{pr.label}</ContextMenuItem>
+                            ))}
+                          </ContextMenuSubContent>
+                        </ContextMenuSub>
+                        {!info.image && (
+                          <ContextMenuItem onSelect={() => muteClip(i)}>{(clip.volume ?? 1) === 0 ? <><Volume2 /> Bật tiếng gốc</> : <><VolumeX /> Tắt tiếng gốc</>}</ContextMenuItem>
+                        )}
+                        {(clip.crop || clip.rotate || clip.flip) && (
+                          <ContextMenuItem onSelect={() => tw(clips.map((c, k) => (k === i ? { ...c, crop: undefined, rotate: undefined, flip: undefined } : c)), `fxreset${i}`)}><RotateCcw /> Bỏ cắt xén, xoay, lật</ContextMenuItem>
+                        )}
+                      </>
+                    )}
+                    <ContextMenuSeparator />
+                    <ContextMenuItem onSelect={() => { setSelected(i); onSelectClip(i); onInspect(); }}><SlidersHorizontal /> Thuộc tính…</ContextMenuItem>
+                    <ContextMenuItem variant="destructive" disabled={clips.length <= 1} onSelect={() => { commit(removeAt(clips, i)); setSelected(Math.max(0, i - 1)); }}><Trash2 /> Xoá đoạn<ContextMenuShortcut>Delete</ContextMenuShortcut></ContextMenuItem>
+                  </ContextMenuContent>
+                  </ContextMenu>
                 );
               })}
             </div>
@@ -614,8 +784,10 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
             {/* the dubbed lines */}
             <div className="relative mt-1" style={{ height: LINES_H }} onPointerDown={scrub}>
               {lines.map((s, k) => (
-                <div key={`${s.id}-${k}`} title={s.vi || "(chưa có lời)"}
-                  className={cn("absolute top-0 h-full overflow-hidden rounded-sm border px-1 text-[10px] leading-5",
+                <div key={`${s.id}-${k}`} title={`${s.vi || "(chưa có lời)"}\nBấm: nhảy tới · Bấm đúp: sửa lời`}
+                  onPointerDown={(e) => { e.stopPropagation(); onSeekOut(s.out0 + 0.01); onEditLine(s.id, false); }}
+                  onDoubleClick={() => onEditLine(s.id, true)}
+                  className={cn("absolute top-0 h-full cursor-pointer overflow-hidden rounded-sm border px-1 text-[10px] leading-5 hover:brightness-110",
                     !s.vi.trim() ? "border-border bg-muted text-muted-foreground"
                       : s.fit?.status === "overflow" ? "border-over/50 bg-over/25"
                         : s.fit?.status === "fast" ? "border-fast/60 bg-fast/25" : "border-ok/50 bg-ok/20")}
@@ -731,6 +903,35 @@ export function TimelinePanel({ project: p, tl, overlays, editLog, music, onMusi
                 ))}
               </div>
             )}
+          </div>
+          <div className="grid gap-2" aria-label="Zoom chậm">
+            <Label className="flex items-center gap-1.5 text-xs text-muted-foreground"><Move className="size-3.5" /> Zoom chậm (hiệu ứng Ken Burns)</Label>
+            <div className="flex gap-1">
+              {([[undefined, "Không"], ["in", "Phóng vào"], ["out", "Thu ra"]] as const).map(([v, name]) => (
+                <button key={name} type="button" disabled={disabled} onClick={() => commit(setProps(clips, sel, { motion: v }))}
+                  className={cn("flex-1 rounded-md border px-2 py-1 text-xs hover:bg-accent", clips[sel].motion === v && "border-primary bg-primary/10 text-primary")}>{name}</button>
+              ))}
+            </div>
+          </div>
+          <div className="grid gap-2" aria-label="Màu của đoạn">
+            <Label className="flex items-center gap-1.5 text-xs text-muted-foreground"><Palette className="size-3.5" /> Màu của đoạn này
+              <span className="ml-auto text-[11px]">cộng thêm vào màu chung của video</span>
+            </Label>
+            <div className="flex flex-wrap gap-1">
+              {COLOR_PRESETS.map((pr) => (
+                <button key={pr.id} type="button" disabled={disabled} onClick={() => colorClip(sel, pr.values, `colorpreset${sel}${pr.id}`)}
+                  className={cn("rounded-full border px-2.5 py-1 text-xs hover:bg-accent", sameColor(clipColor(clips[sel].color), pr.values) && "border-primary bg-primary/10 text-primary")}>
+                  {pr.label}
+                </button>
+              ))}
+            </div>
+            {([["brightness", "Độ sáng", -100], ["contrast", "Tương phản", -100], ["saturation", "Độ tươi màu", -100], ["temperature", "Ấm / lạnh", -100]] as const).map(([k, name, min]) => (
+              <div key={k} className="grid gap-1">
+                <Label className="flex text-[11px] text-muted-foreground">{name}<span className="ml-auto font-mono text-foreground">{clipColor(clips[sel].color)[k]}</span></Label>
+                <Slider min={min} max={100} step={1} disabled={disabled} value={[clipColor(clips[sel].color)[k]]}
+                  onValueChange={([v]) => colorClip(sel, { ...clipColor(clips[sel].color), [k]: v })} aria-label={`${name} của đoạn`} />
+              </div>
+            ))}
           </div>
           <div className="grid gap-2">
             <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">Mờ dần vào

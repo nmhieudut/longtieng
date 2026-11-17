@@ -35,3 +35,12 @@ export function vignetteOverlay(c: Color): string | null {
   if (!c.vignette) return null;
   return `radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,${((c.vignette / 100) * 0.75).toFixed(2)}) 100%)`;
 }
+
+/** A clip's own colour (only the changed sliders are stored) as full slider values. */
+export const clipColor = (c: Partial<Color> | undefined): Color => ({ ...COLOR_ZERO, ...(c ?? {}) });
+/** ... and back: undefined when nothing is changed, so the clip stays "plain". */
+export function packColor(c: Color): Partial<Color> | undefined {
+  const out: Partial<Color> = {};
+  for (const k of Object.keys(COLOR_ZERO) as (keyof Color)[]) if (c[k]) out[k] = c[k];
+  return Object.keys(out).length ? out : undefined;
+}

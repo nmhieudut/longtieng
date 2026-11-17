@@ -6,7 +6,7 @@ existing projects keep working)."""
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .config import OPENAI_MODEL, lang_info, openai_key, target_info
+from .config import gpt_args, lang_info, openai_key, target_info
 
 BATCH = 40          # review mode: runs one batch after another so the narration flows
 PAR_BATCH = 24      # faithful translation: small batches, several at once
@@ -98,13 +98,12 @@ def _ask(client, system: str, user: dict, want: set, temperature: float) -> dict
     got: dict = {}
     for _attempt in range(2):
         r = client.chat.completions.create(
-            model=OPENAI_MODEL,
+            **gpt_args(temperature),
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
             ],
             response_format={"type": "json_object"},
-            temperature=temperature,
         )
         try:
             data = json.loads(r.choices[0].message.content)

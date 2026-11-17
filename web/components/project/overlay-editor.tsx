@@ -80,13 +80,14 @@ export function OverlayTrack({ items, pps, total, selectedId, disabled, srcDurat
   return (
     <div data-track="overlay" className="relative mt-1" style={{ height: OVERLAY_H * lanes }} onPointerDown={onScrub}>
       {items.map((o, n) => (
-        <div key={o.id} role="button" tabIndex={0} title={o.kind === "text" ? o.text : o.kind === "video" ? "Video chồng" : "Hình dán"}
+        <div key={o.id} role="button" tabIndex={0} title={o.kind === "text" ? o.text : o.kind === "video" ? "Video chồng" : o.kind === "blur" ? "Vùng làm mờ" : "Hình dán"}
           onPointerDown={(e) => drag(e, o, "move")}
           className={cn("absolute flex items-center overflow-hidden rounded-sm border px-1.5 text-[10px] leading-none",
-            o.kind === "text" ? "border-primary/50 bg-primary/20" : o.kind === "video" ? "border-ok/60 bg-ok/20" : "border-fast/60 bg-fast/25",
+            o.kind === "text" ? "border-primary/50 bg-primary/20" : o.kind === "video" ? "border-ok/60 bg-ok/20"
+              : o.kind === "blur" ? "border-muted-foreground/50 bg-muted-foreground/20" : "border-fast/60 bg-fast/25",
             selectedId === o.id && "ring-2 ring-primary", disabled ? "cursor-default" : "cursor-grab active:cursor-grabbing")}
           style={{ left: o.start * pps, top: lane[n] * OVERLAY_H, width: Math.max((o.end - o.start) * pps - 1, 6), height: OVERLAY_H - 2 }}>
-          <span className="pointer-events-none truncate">{o.kind === "text" ? o.text : o.kind === "video" ? "▶ Video chồng" : "▣ Hình dán"}</span>
+          <span className="pointer-events-none truncate">{o.kind === "text" ? o.text : o.kind === "video" ? "▶ Video chồng" : o.kind === "blur" ? (o.style === "pixelate" ? "▦ Làm ô vuông" : "◌ Làm mờ") : "▣ Hình dán"}</span>
           {(["start", "end"] as const).map((side) => (
             <span key={side} onPointerDown={(e) => drag(e, o, side)}
               className={cn("absolute top-0 h-full cursor-col-resize hover:bg-primary/50", side === "start" ? "left-0" : "right-0")}
@@ -134,7 +135,7 @@ export function OverlayInspector({ o, total, disabled, onChange, onDelete }: {
   return (
     <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 rounded-xl border p-3" aria-label="Thuộc tính chữ hoặc hình dán">
       <p className="flex items-center justify-between text-xs font-medium">
-        {o.kind === "text" ? "Chữ" : o.kind === "video" ? "Video chồng" : "Hình dán"} · {clock(o.start)}–{clock(o.end)}
+        {o.kind === "text" ? "Chữ" : o.kind === "video" ? "Video chồng" : o.kind === "blur" ? "Vùng làm mờ" : "Hình dán"} · {clock(o.start)}–{clock(o.end)}
         <Button type="button" variant="ghost" size="sm" disabled={disabled} onClick={onDelete}><Trash2 /> Xoá</Button>
       </p>
       {o.kind === "text" && (
@@ -158,8 +159,35 @@ export function OverlayInspector({ o, total, disabled, onChange, onDelete }: {
                 onChange={(e) => onChange({ color: e.target.value })} className="size-7 cursor-pointer rounded border bg-transparent p-0" />
             </div>
           </div>
+          <div className="grid gap-2">
+            <Label className="text-xs text-muted-foreground">Hiện / ẩn dần ({(o.fade ?? 0) ? `${(o.fade ?? 0).toFixed(1)}s` : "tắt"})</Label>
+            <Slider min={0} max={1.5} step={0.1} disabled={disabled} value={[o.fade ?? 0]} onValueChange={([v]) => onChange({ fade: v })} aria-label="Hiện ẩn dần" />
+          </div>
           <label className="flex items-center gap-2 text-xs"><Switch checked={!!o.box} disabled={disabled} onCheckedChange={(v) => onChange({ box: v })} /> Nền tối sau chữ</label>
           <label className="flex items-center gap-2 text-xs"><Switch checked={o.bold ?? true} disabled={disabled} onCheckedChange={(v) => onChange({ bold: v })} /> Chữ đậm</label>
+        </>
+      )}
+      {o.kind === "blur" && (
+        <>
+          <div className="flex gap-1">
+            {([["blur", "Làm mờ"], ["pixelate", "Ô vuông"]] as const).map(([v, name]) => (
+              <button key={v} type="button" disabled={disabled} onClick={() => onChange({ style: v })}
+                className={cn("flex-1 rounded-md border px-2 py-1 text-xs hover:bg-accent", (o.style ?? "blur") === v && "border-primary bg-primary/10 text-primary")}>{name}</button>
+            ))}
+          </div>
+          <div className="grid gap-2">
+            <Label className="text-xs text-muted-foreground">Độ mạnh ({o.strength ?? 50})</Label>
+            <Slider min={5} max={100} step={1} disabled={disabled} value={[o.strength ?? 50]} onValueChange={([v]) => onChange({ strength: v })} aria-label="Độ mạnh" />
+          </div>
+          <div className="grid gap-2">
+            <Label className="text-xs text-muted-foreground">Rộng ({Math.round(o.size * 100)}%)</Label>
+            <Slider min={0.03} max={1} step={0.01} disabled={disabled} value={[o.size]} onValueChange={([v]) => onChange({ size: v })} aria-label="Rộng" />
+          </div>
+          <div className="grid gap-2">
+            <Label className="text-xs text-muted-foreground">Cao ({Math.round((o.h ?? 0.2) * 100)}%)</Label>
+            <Slider min={0.03} max={1} step={0.01} disabled={disabled} value={[o.h ?? 0.2]} onValueChange={([v]) => onChange({ h: v })} aria-label="Cao" />
+          </div>
+          <p className="text-[11px] text-muted-foreground">Kéo khung trên video để đặt chỗ, kéo góc để đổi cỡ. Phụ đề và chữ vẫn nằm trên, không bị mờ.</p>
         </>
       )}
       {o.kind === "video" && (

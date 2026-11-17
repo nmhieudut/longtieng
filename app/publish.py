@@ -9,7 +9,7 @@ import numpy as np
 
 from . import cancel
 from . import frame, render
-from .config import FFMPEG, OPENAI_MODEL, openai_key, sub_font, target_info
+from .config import FFMPEG, gpt_args, openai_key, sub_font, target_info
 from .media import MediaError
 
 CAPTION_SYSTEM = """Bạn là admin một fanpage Facebook giải trí/review ở Việt Nam, chuyên đăng Reels lồng tiếng video Douyin.
@@ -50,11 +50,10 @@ def make_caption(proj: dict) -> dict:
     target = proj["settings"]["target"]
     system = CAPTION_SYSTEM if target == "vi" else CAPTION_SYSTEM_OTHER.format(dst=target_info(target)["name"])
     r = client.chat.completions.create(
-        model=OPENAI_MODEL,
+        **gpt_args(0.7),
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
         response_format={"type": "json_object"},
-        temperature=0.7,
     )
     try:
         d = json.loads(r.choices[0].message.content)

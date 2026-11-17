@@ -93,6 +93,7 @@ const Row = memo(function Row({ seg, idx, slot, fresh, active, busy, onSeek, onS
   return (
     <div
       data-idx={idx}
+      data-sid={seg.id}
       className={cn(
         "grid grid-cols-[3.25rem_1fr] gap-x-3 gap-y-2 border-l-[3px] border-l-transparent px-4 py-3 transition-colors",
         active && "bg-primary/5",

@@ -31,7 +31,7 @@ for f in bin_dir.rglob("*"):
 
 # offline voices (VieNeu, app/vieneu_tts.py): onnxruntime + tokenizers + its own phonemizer, no torch.
 # Only the core package: its demo (gradio) and cloning (librosa) parts are left out on purpose.
-pkgs = ["webview", "opencc", "certifi", "edge_tts", "gtts", "yt_dlp", "onnxruntime", "tokenizers",
+pkgs = ["webview", "opencc", "certifi", "gtts", "yt_dlp", "onnxruntime", "tokenizers",
         "sea_g2p", "vieneu_utils"]
 hiddenimports += collect_submodules("vieneu")
 datas += collect_data_files("vieneu") + copy_metadata("vieneu")  # metadata carries the Apache-2.0 license text

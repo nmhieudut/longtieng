@@ -8,7 +8,7 @@ Tool cá nhân, chạy local trên Mac (M3, 16GB). Không đăng nhập, không 
 2. **Nhận dạng** (tự động): tách audio → mlx-whisper `large-v3-turbo` (fallback faster-whisper). Ngôn ngữ mặc định `zh`, có tùy chọn tự nhận diện. Bật VAD, lọc câu lặp/ảo giác ở đoạn nhạc, chuẩn hoá chữ Trung về giản thể.
 3. **Dịch** (tự động): OpenAI model mini (tên model trong `.env`), dịch theo lô có ngữ cảnh, yêu cầu câu ngắn gọn vừa thời lượng. Fallback: Google (deep-translator) khi không có key/hết quota.
 4. **Chỉnh sửa**: bảng câu gốc + bản dịch, sửa từng câu, click câu → video nhảy tới đúng chỗ, nghe thử/tạo lại giọng từng câu, câu tràn thời lượng tô đỏ.
-5. **Lồng tiếng**: edge-tts (`vi-VN-HoaiMyNeural` mặc định, `vi-VN-NamMinhNeural`), tốc độ chung 0.8–1.3x.
+5. **Lồng tiếng**: Google TTS (`google:vi` mặc định) hoặc VieNeu (offline), tốc độ chung 0.8–1.3x.
 6. **Xuất**: preview đoạn ngắn (~30s) trước, rồi render full.
 
 Dự án được lưu xuống đĩa (`data/projects/<id>/`), tải lại trang không mất việc.
@@ -42,7 +42,7 @@ Câu Việt dài hơn câu Trung → xử lý 3 lớp:
 | Frontend | Next.js (static export) + Tailwind + shadcn/ui trong `web/`; FastAPI phục vụ `web/out` |
 | STT | mlx-whisper (fallback faster-whisper) |
 | Dịch | OpenAI (model mini) → fallback deep-translator |
-| TTS | edge-tts |
+| TTS | gTTS (Google), VieNeu (offline) |
 | Tách vocal | demucs (tùy chọn) |
 | Video/audio | ffmpeg trực tiếp (`ffmpeg-full` để có libass cho phụ đề cứng), yt-dlp |
 

@@ -1,13 +1,14 @@
 "use client";
 
 import { BadgeCheck, Copy, Film, ImagePlus, Trash2, Type, Maximize, Minimize, Pause, Play, SkipBack, Timer, Volume2, VolumeX } from "lucide-react";
-import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { IconButton } from "@/components/ui/icon-button";
 import { Slider } from "@/components/ui/slider";
 import type { Crop } from "@/lib/timeline";
-import { desktopApi, fileUrl, fmt, type Overlay, type Project, type Settings } from "@/lib/api";
-import { colorIsDefault, cssFilter, vignetteOverlay, warmthOverlay } from "@/lib/color";
+import { api, desktopApi, fileUrl, fmt, type Overlay, type Project, type Settings, type SubCues } from "@/lib/api";
+import { geom } from "@/lib/frame";
+import { clipColor, colorIsDefault, cssFilter, vignetteOverlay, warmthOverlay } from "@/lib/color";
 import { cn } from "@/lib/utils";
 
 export type VideoView = "source" | "preview" | "final";
@@ -22,6 +23,7 @@ type Props = {
   activeIdx: number;
   mask: Settings["mask"];
   color: Settings["color"];
+  look: Settings;          // every setting as it is being edited (framing, subtitles): the picture shows the export
   srcId: number;           // which video file is loaded (0 = main)
   edited: boolean;         // the timeline has cuts, so an exported video is in another time than the lines
   overlays: Overlay[];     // texts and stickers (output time), shown roughly over the original video
@@ -44,7 +46,7 @@ type Props = {
   gap: boolean;            // a blank clip is on the playhead: black, no video
   stillImage: string | null;   // ... or a photo: shown instead of the video
   stillDims: { w: number; h: number } | null;   // its size in pixels
-  fx: { crop?: Crop; rotate?: number; flip?: boolean } | null;   // how the clip on the playhead is cropped / turned
+  fx: { crop?: Crop; rotate?: number; flip?: boolean; color?: Partial<Settings["color"]>; motion?: "in" | "out"; progress?: number } | null;   // how the clip on the playhead is cropped / turned / coloured
   cropMode: boolean;       // the crop frame is being edited on the picture
   onCrop: (c: Crop | null) => void;
   volume: number;
@@ -54,6 +56,7 @@ type Props = {
   onTogglePlay: () => void;
   scrub?: { value: number; max: number; seek: (t: number) => void };   // set when the bar runs in output time (edited original)
   onSeek: (t: number) => void;
+  onEditLine: (sid: number, focus: boolean) => void;   // a line on the strip under the video was clicked
   onTime: (t: number) => void;
   onLoaded: () => void;
 };
@@ -65,11 +68,30 @@ const VIEWS = [
 ] as const;
 
 export function VideoPanel({
-  project: p, videoRef, src, view, onView, time, activeIdx, mask, color, srcId, edited, overlays, outTime,
-  logo, onMoveLogo, onCommitLogo, onResizeLogo, stillImage, stillDims, fx, cropMode, onCrop, selectedOverlay, editable, onSelectOverlay, onMoveOverlay, onResizeOverlay, onEditText, onAddText, onAddSticker, onDuplicateOverlay, onDeleteOverlay, playing, gap, volume, muted, onVolume, onMuted, onTogglePlay, scrub, onSeek, onTime, onLoaded,
+  project: p, videoRef, src, view, onView, time, activeIdx, mask, color, look, srcId, edited, overlays, outTime,
+  logo, onMoveLogo, onCommitLogo, onResizeLogo, stillImage, stillDims, fx, cropMode, onCrop, selectedOverlay, editable, onSelectOverlay, onMoveOverlay, onResizeOverlay, onEditText, onAddText, onAddSticker, onDuplicateOverlay, onDeleteOverlay, playing, gap, volume, muted, onVolume, onMuted, onTogglePlay, scrub, onSeek, onEditLine, onTime, onLoaded,
 }: Props) {
   const box = useMaskBox(videoRef, src);
   const stage = useRef<HTMLDivElement>(null);
+  const stageSize = useSize(stage);
+  const cues = useCues(p, look);
+  // The original is shown the way the export will look: the output canvas (aspect, blurred background, zoom) fitted
+  // in the stage, the picture placed on it like app/frame.py does. An exported video is shown as it is.
+  const wysiwyg = view === "source" && !!p.media;
+  const g = geom(p.media?.width ?? 16, p.media?.height ?? 9,
+    wysiwyg && !cropMode ? look.frame : { aspect: "original", fit: "blur", zoom: 1 });
+  const k = stageSize ? Math.min(stageSize.w / g.W, stageSize.h / g.H) : 0;
+  // canvas box, in stage pixels (texts, stickers, logo and subtitles are placed on it, as in the export)
+  const cv = stageSize && k ? { x: (stageSize.w - g.W * k) / 2, y: (stageSize.h - g.H * k) / 2, w: g.W * k, h: g.H * k } : null;
+  const canvasStyle: React.CSSProperties = wysiwyg && cv ? { left: cv.x, top: cv.y, width: cv.w, height: cv.h } : { inset: 0 };
+  const picStyle: React.CSSProperties = wysiwyg && cv ? { left: g.ox * k, top: g.oy * k, width: g.sw * k, height: g.sh * k } : { inset: 0 };
+  // the clip's own colour: on the picture and on its blurred copy (the export colours the clip before framing it)
+  const clipFilter = wysiwyg && fx?.color ? cssFilter(clipColor(fx.color)) : undefined;
+  // a slow zoom (Ken Burns): the picture grows (or shrinks back) through the clip, as app/timeline.py zoompan does
+  const zoomNow = wysiwyg && fx?.motion ? 1 + 0.15 * (fx.motion === "in" ? fx.progress ?? 0 : 1 - (fx.progress ?? 0)) : 1;
+  const clipWarm = wysiwyg && fx?.color ? warmthOverlay(clipColor(fx.color)) : null;
+  const clipVig = wysiwyg && fx?.color ? vignetteOverlay(clipColor(fx.color)) : null;
+  const cueNow = wysiwyg && cues && cv ? cues.cues.find((c) => outTime >= c.a && outTime < c.b) ?? null : null;
   const [vd, setVd] = useState<{ src: string | null; d: number }>({ src: null, d: 0 });
   const vdur = vd.src === src ? vd.d : 0;   // the length of the file that is loaded now, not the one before
   const [full, setFull] = useState(false);
@@ -95,6 +117,7 @@ export function VideoPanel({
   const [dragging, setDragging] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const startResize = (e: React.PointerEvent, o: Overlay) => {
+    const box = cv;
     if (!box) return;
     e.preventDefault();
     e.stopPropagation();
@@ -102,13 +125,14 @@ export function VideoPanel({
     if (!r) return;
     const cx = r.left + box.x + o.x * box.w, cy = r.top + box.y + o.y * box.h;
     const d0 = Math.max(8, Math.hypot(e.clientX - cx, e.clientY - cy));
-    const max = o.kind === "video" ? 1 : o.kind === "text" ? 0.3 : 0.8;
+    const max = o.kind === "video" || o.kind === "blur" ? 1 : o.kind === "text" ? 0.3 : 0.8;
     const move = (ev: PointerEvent) => onResizeOverlay(o.id, Math.min(max, Math.max(0.03, o.size * (Math.hypot(ev.clientX - cx, ev.clientY - cy) / d0))));
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
   const startDrag = (e: React.PointerEvent, o: Overlay) => {
+    const box = cv;
     if (!box) return;
     e.preventDefault();
     e.stopPropagation();
@@ -124,12 +148,14 @@ export function VideoPanel({
   };
   // the channel logo / name: drag it anywhere, corner handles resize it (what you see is the position it exports at)
   const logoOn = !!(logo.image || logo.text);
-  const logoPos = box && logoOn ? (() => {
+  const logoPos = cv && logoOn ? (() => {
+    const box = cv;
     const pad = Math.min(box.w, box.h) * 0.04;
     if (logo.x != null && logo.y != null) return { cx: box.x + logo.x * box.w, cy: box.y + logo.y * box.h };
     return { cx: box.x + (logo.position.endsWith("l") ? pad : box.w - pad), cy: box.y + (logo.position.startsWith("t") ? pad : box.h - pad), corner: logo.position };
   })() : null;
   const startLogoDrag = (e: React.PointerEvent) => {
+    const box = cv;
     if (!box) return;
     e.preventDefault();
     e.stopPropagation();
@@ -150,6 +176,7 @@ export function VideoPanel({
     window.addEventListener("pointerup", up);
   };
   const startLogoResize = (e: React.PointerEvent) => {
+    const box = cv;
     if (!box) return;
     e.preventDefault();
     e.stopPropagation();
@@ -195,57 +222,95 @@ export function VideoPanel({
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div ref={stage} data-stage className={cn("group/stage min-h-0 flex-1 overflow-hidden bg-black", full ? "fixed inset-0 z-[100]" : "relative rounded-xl")}>
-        {src ? (
-          <div className="absolute inset-0" style={previewFx ? { clipPath: `inset(${box!.y}px ${box!.sw - box!.x - box!.w}px ${box!.sh - box!.y - box!.h}px ${box!.x}px)` } : undefined}>
-            <video
-              ref={videoRef}
-              src={src}
-              playsInline
-              preload="metadata"
-              className="absolute inset-0 size-full cursor-pointer bg-black object-contain"
-              style={{ ...(live ? { filter: cssFilter(color) } : {}), ...(previewFx ? previewFx : {}) }}
-              onClick={() => { onSelectOverlay(null); onTogglePlay(); }}
-              onTimeUpdate={(e) => onTime(e.currentTarget.currentTime)}
-              onLoadedMetadata={(e) => { setVd({ src, d: e.currentTarget.duration || 0 }); onLoaded(); }}
-              onDurationChange={(e) => setVd({ src, d: e.currentTarget.duration || 0 })}
-            />
+        {/* the output canvas: blurred background, then the picture on it; the colour is applied to both, as in the export */}
+        <div className={cn("absolute overflow-hidden", wysiwyg && "bg-black")}
+          style={{ ...canvasStyle, ...(live ? { filter: cssFilter(color) } : {}), ...(wysiwyg && g.blur && look.frame.bg === "color" ? { background: look.frame.bg_color } : {}) }}>
+          {wysiwyg && g.blur && look.frame.bg === "image" && look.frame.bg_image && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={`/api/logos/${look.frame.bg_image}/file`} alt="" className="pointer-events-none absolute inset-0 size-full object-cover" />
+          )}
+          {wysiwyg && g.blur && ((look.frame.bg ?? "blur") === "blur" || (look.frame.bg === "image" && !look.frame.bg_image)) && src && (
+            <BackdropVideo src={gap && stillImage ? stillImage : src} still={gap && !!stillImage} main={videoRef} playing={playing} time={time}
+              blur={34 * k * ((look.frame.blur ?? 40) / 40)} extraFilter={clipFilter} />
+          )}
+          <div className="absolute overflow-hidden" style={{ ...picStyle, ...(clipFilter ? { filter: clipFilter } : {}) }}>
+           <div className="absolute inset-0" style={zoomNow !== 1 ? { transform: `scale(${zoomNow.toFixed(4)})` } : undefined}>
+            {src ? (
+              <div className="absolute inset-0" style={previewFx ? { clipPath: `inset(${box!.y}px ${box!.sw - box!.x - box!.w}px ${box!.sh - box!.y - box!.h}px ${box!.x}px)` } : undefined}>
+                <video
+                  ref={videoRef}
+                  src={src}
+                  playsInline
+                  preload="metadata"
+                  className={cn("absolute inset-0 size-full cursor-pointer object-contain", !(wysiwyg && g.blur) && "bg-black")}
+                  style={previewFx ?? undefined}
+                  onClick={() => { onSelectOverlay(null); onTogglePlay(); }}
+                  onTimeUpdate={(e) => onTime(e.currentTarget.currentTime)}
+                  onLoadedMetadata={(e) => { setVd({ src, d: e.currentTarget.duration || 0 }); onLoaded(); }}
+                  onDurationChange={(e) => setVd({ src, d: e.currentTarget.duration || 0 })}
+                />
+              </div>
+            ) : (
+              <div className="grid size-full place-items-center text-sm text-white/60">Đang tải video…</div>
+            )}
+            {gap && (
+              <div className="pointer-events-none absolute inset-0 grid place-items-center overflow-hidden bg-black text-sm text-white/50"
+                style={previewFx && fxBox ? { clipPath: `inset(${fxBox.y}px ${fxBox.sw - fxBox.x - fxBox.w}px ${fxBox.sh - fxBox.y - fxBox.h}px ${fxBox.x}px)` } : undefined}>
+                {stillImage ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={stillImage} alt="" className="absolute inset-0 size-full object-contain" style={previewFx ?? undefined} />
+                ) : "Khoảng trống"}
+              </div>
+            )}
+           </div>
+            {clipWarm && <div className="pointer-events-none absolute inset-0 mix-blend-soft-light" style={clipWarm} />}
+            {clipVig && <div className="pointer-events-none absolute inset-0" style={{ background: clipVig }} />}
+            {/* the band over the original subtitles, as the export hides it (on the picture, before the framing) */}
+            {mask.enabled && wysiwyg && !cropMode && (
+              <div className="pointer-events-none absolute inset-x-0"
+                style={{
+                  top: `${100 - mask.bottom - mask.height}%`, height: `${mask.height}%`,
+                  ...(mask.style === "box" ? { background: "rgba(0,0,0,.82)" }
+                    : { backdropFilter: `blur(${(g.sh * k * mask.height) / 400}px)`, WebkitBackdropFilter: `blur(${(g.sh * k * mask.height) / 400}px)` }),
+                }} />
+            )}
+            {cropMode && fxBox && view === "source" && (
+              <CropEditor box={fxBox} crop={fx?.crop ?? null} onChange={onCrop} />
+            )}
           </div>
-        ) : (
-          <div className="grid size-full place-items-center text-sm text-white/60">Đang tải video…</div>
-        )}
-        {gap && (
-          <div className="pointer-events-none absolute inset-0 grid place-items-center overflow-hidden bg-black text-sm text-white/50"
-            style={previewFx && fxBox ? { clipPath: `inset(${fxBox.y}px ${fxBox.sw - fxBox.x - fxBox.w}px ${fxBox.sh - fxBox.y - fxBox.h}px ${fxBox.x}px)` } : undefined}>
-            {stillImage ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={stillImage} alt="" className="absolute inset-0 size-full object-contain" style={previewFx ?? undefined} />
-            ) : "Khoảng trống"}
-          </div>
-        )}
-        {cropMode && fxBox && view === "source" && (
-          <CropEditor box={fxBox} crop={fx?.crop ?? null} onChange={onCrop} />
-        )}
+          {warm && <div className="pointer-events-none absolute inset-0 mix-blend-soft-light" style={warm} />}
+          {vig && <div className="pointer-events-none absolute inset-0" style={{ background: vig }} />}
+        </div>
+        {cueNow && cues && cv && stageSize && <SubtitleLine cue={cueNow.t} look={cues} cv={cv} stageH={stageSize.h} />}
         {src && !playing && (
           <button type="button" onClick={onTogglePlay} aria-label="Phát"
             className="absolute left-1/2 top-1/2 grid size-14 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/50 text-white backdrop-blur-sm transition hover:bg-black/70">
             <Play className="size-6 translate-x-0.5 fill-current" />
           </button>
         )}
-        {warm && <div className="pointer-events-none absolute inset-0 mix-blend-soft-light" style={warm} />}
-        {vig && <div className="pointer-events-none absolute inset-0" style={{ background: vig }} />}
         {live && (
           <span className="pointer-events-none absolute right-2 top-2 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white">
             Xem nhanh · gần đúng
           </span>
         )}
-        {box && overlays.filter((o) => outTime >= o.start && outTime <= o.end).map((o) => {
-          const base = Math.min(box.w, box.h);
+        {cv && overlays.filter((o) => outTime >= o.start && outTime <= o.end).map((o) => {
+          const box = cv;
+          const base = Math.min(box.w, box.h) * ASS_EM;
+          const blurBox = o.kind === "blur";
           const sel = editable && selectedOverlay === o.id;
           const editingThis = editing === o.id && o.kind === "text";
           // text size is a fraction of the short side, pictures and videos a fraction of the width
+          // a blurred area stays inside the picture, as the export keeps it (app/overlays.py blur_filters)
+          const bw = Math.min(1, o.size) * box.w, bh = Math.min(1, o.h ?? 0.2) * box.h;
+          const cx = blurBox ? Math.min(box.w - bw / 2, Math.max(bw / 2, o.x * box.w)) : o.x * box.w;
+          const cy = blurBox ? Math.min(box.h - bh / 2, Math.max(bh / 2, o.y * box.h)) : o.y * box.h;
           const wrap: React.CSSProperties = {
-            left: box.x + o.x * box.w, top: box.y + o.y * box.h, transform: "translate(-50%, -50%)",
+            left: box.x + cx, top: box.y + cy, transform: "translate(-50%, -50%)",
             ...(o.kind === "text" ? { maxWidth: box.w * 0.9 } : { width: o.size * box.w }),
+            // a blurred area is drawn under the subtitles and texts (the export blurs before writing them)
+            ...(blurBox ? { height: (o.h ?? 0.2) * box.h, zIndex: 1 } : { zIndex: 3 }),
+            // a text that fades in and out (ASS \fad in the export)
+            ...(o.kind === "text" && o.fade ? { opacity: Math.max(0, Math.min(1, (outTime - o.start) / o.fade, (o.end - outTime) / o.fade)) } : {}),
           };
           // drag to move, corner handles to resize, double-click a text to type in it
           return (
@@ -253,7 +318,14 @@ export function VideoPanel({
               className={cn("absolute", editable ? (dragging === o.id ? "cursor-grabbing" : "cursor-grab") : "pointer-events-none", sel && "outline outline-2 outline-offset-2 outline-primary")}
               onPointerDown={editable && !editingThis ? (e) => startDrag(e, o) : undefined}
               onDoubleClick={editable && o.kind === "text" ? () => setEditing(o.id) : undefined}>
-              {o.kind === "text" ? (
+              {blurBox ? (
+                <div className="size-full" style={{
+                  // CSS cannot make squares: a pixelated area shows as a strong blur here (the export has the squares)
+                  backdropFilter: `blur(${Math.max(2, Math.min(o.size * box.w, (o.h ?? 0.2) * box.h) * (o.strength ?? 50) / (o.style === "pixelate" ? 120 : 300))}px)`,
+                  WebkitBackdropFilter: `blur(${Math.max(2, Math.min(o.size * box.w, (o.h ?? 0.2) * box.h) * (o.strength ?? 50) / (o.style === "pixelate" ? 120 : 300))}px)`,
+                  outline: sel ? undefined : "1px dashed rgba(255,255,255,.35)",
+                }} />
+              ) : o.kind === "text" ? (
                 editingThis ? (
                   <textarea autoFocus onFocus={(e) => e.currentTarget.select()} value={o.text ?? ""} rows={Math.max(1, (o.text ?? "").split("\n").length)}
                     onChange={(e) => onEditText(o.id, e.target.value)} onBlur={() => setEditing(null)}
@@ -286,36 +358,23 @@ export function VideoPanel({
             </div>
           );
         })}
-        {logoPos && box && view === "source" && (
+        {logoPos && cv && view === "source" && (
           <div onPointerDown={editable ? startLogoDrag : undefined}
             className={cn("absolute", editable ? "cursor-grab active:cursor-grabbing" : "pointer-events-none", editable && selectedOverlay === "logo" && "outline outline-2 outline-offset-2 outline-primary")}
             style={{
               opacity: logo.opacity, transform: logo.x != null || !logoPos.corner ? "translate(-50%, -50%)" : `translate(${logoPos.corner.endsWith("l") ? "0" : "-100%"}, ${logoPos.corner.startsWith("t") ? "0" : "-100%"})`,
-              left: logoPos.cx, top: logoPos.cy, ...(logo.image ? { width: logo.size * box.w } : {}),
+              left: logoPos.cx, top: logoPos.cy, zIndex: 3, ...(logo.image ? { width: logo.size * cv.w } : {}),
             }}>
             {logo.image ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={`/api/logos/${logo.image}/file`} alt="" draggable={false} className="block w-full select-none" />
             ) : (
-              <span className="select-none whitespace-nowrap font-bold text-white" style={{ fontSize: Math.min(box.w, box.h) * 0.035 * Math.sqrt(logo.size / 0.16), textShadow: "0 0 3px #000, 0 0 3px #000" }}>{logo.text}</span>
+              <span className="select-none whitespace-nowrap font-bold text-white" style={{ fontSize: Math.max(14 * k, Math.min(cv.w, cv.h) * 0.035 * Math.sqrt(logo.size / 0.16)) * ASS_EM, textShadow: "0 0 3px #000, 0 0 3px #000" }}>{logo.text}</span>
             )}
             {editable && selectedOverlay === "logo" && (["-left-1.5 -top-1.5 cursor-nwse-resize", "-right-1.5 -top-1.5 cursor-nesw-resize",
               "-bottom-1.5 -left-1.5 cursor-nesw-resize", "-bottom-1.5 -right-1.5 cursor-nwse-resize"] as const).map((pos) => (
               <span key={pos} onPointerDown={startLogoResize} className={cn("absolute size-3 rounded-sm border-2 border-primary bg-white", pos)} />
             ))}
-          </div>
-        )}
-        {mask.enabled && view === "source" && box && (
-          <div
-            className="pointer-events-none absolute border-2 border-dashed border-orange-300 bg-orange-300/15"
-            style={{
-              left: box.x,
-              width: box.w,
-              top: box.y + box.h * (1 - (mask.bottom + mask.height) / 100),
-              height: (box.h * mask.height) / 100,
-            }}
-          >
-            <span className="absolute -top-5 left-1 rounded bg-orange-400 px-1.5 text-[10px] font-medium text-white">vùng che</span>
           </div>
         )}
         {full && (
@@ -368,7 +427,7 @@ export function VideoPanel({
       </div>
 
       {dur > 0 && p.segments.length > 0 && !(edited && view !== "source") && (
-        <Timeline project={p} srcId={srcId} dur={dur} time={view === "preview" ? -1 : time} activeIdx={activeIdx} onSeek={onSeek} />
+        <Timeline project={p} srcId={srcId} dur={dur} time={view === "preview" ? -1 : time} activeIdx={activeIdx} onSeek={onSeek} onEditLine={onEditLine} />
       )}
     </div>
   );
@@ -403,12 +462,12 @@ const FIT_COLOR = {
   overflow: "bg-over/80 hover:bg-over",
 } as const;
 
-function Timeline({ project: p, srcId, dur, time, activeIdx, onSeek }: { project: Project; srcId: number; dur: number; time: number; activeIdx: number; onSeek: (t: number) => void }) {
+function Timeline({ project: p, srcId, dur, time, activeIdx, onSeek, onEditLine }: { project: Project; srcId: number; dur: number; time: number; activeIdx: number; onSeek: (t: number) => void; onEditLine: (sid: number, focus: boolean) => void }) {
   const pct = (t: number) => `${(Math.min(Math.max(t, 0), dur) / dur) * 100}%`;
   return (
     <div className="shrink-0">
       <div
-        title="Mỗi khối là một câu, bấm để nhảy tới. Xanh: vừa khung · vàng: đọc nhanh hơn · đỏ: tràn, sẽ bị cắt · xám: chưa dịch"
+        title="Mỗi khối là một câu: bấm để nhảy tới, bấm đúp để sửa lời. Xanh: vừa khung · vàng: đọc nhanh hơn · đỏ: tràn, sẽ bị cắt · xám: chưa dịch"
         className="relative h-6 cursor-pointer overflow-hidden rounded-md bg-muted"
         onClick={(e) => {
           const r = e.currentTarget.getBoundingClientRect();
@@ -424,7 +483,8 @@ function Timeline({ project: p, srcId, dur, time, activeIdx, onSeek }: { project
           <div
             key={s.id}
             title={`${fmt(s.start)} · ${s.vi || s.src}`}
-            onClick={(e) => { e.stopPropagation(); onSeek(s.start + 0.01); }}
+            onClick={(e) => { e.stopPropagation(); onSeek(s.start + 0.01); onEditLine(s.id, false); }}
+            onDoubleClick={(e) => { e.stopPropagation(); onEditLine(s.id, true); }}
             className={cn(
               "absolute inset-y-1 rounded-sm transition-colors",
               !s.vi.trim() ? "bg-muted-foreground/30" : FIT_COLOR[s.fit?.status ?? "ok"],
@@ -501,6 +561,84 @@ function CropEditor({ box, crop, onChange }: { box: { x: number; y: number; w: n
             className={cn("absolute rounded-sm border-2 border-primary bg-white", k === "g" ? "size-3" : "h-3 w-3", pos)} />
         ))}
       </div>
+    </div>
+  );
+}
+
+/** CSS font-size for one unit of libass font size: libass sizes a font by its whole line (winAscent + winDescent),
+ *  CSS by its em. Measured on the bundled Be Vietnam Pro (0.655); close enough for the system fonts of other scripts. */
+const ASS_EM = 0.655;
+
+function useSize(ref: RefObject<HTMLElement | null>) {
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    setSize({ w: el.clientWidth, h: el.clientHeight });
+    return () => ro.disconnect();
+  }, [ref]);
+  return size;
+}
+
+/** The burned-in subtitles from the server (same cue times and line breaks as the export), for the settings being edited. */
+function useCues(p: Project, look: Settings): SubCues | null {
+  const [cues, setCues] = useState<SubCues | null>(null);
+  const body = JSON.stringify({ subtitle_mode: look.subtitle_mode, sub_size: look.sub_size, sub_margin: look.sub_margin,
+    sub_style: look.sub_style, target: look.target, frame: look.frame, mask: look.mask });
+  const lines = useMemo(() => p.segments.map((s) => `${s.id}:${s.start}:${s.end}:${s.vi}:${s.tts?.file ?? ""}`).join("|")
+    + JSON.stringify(p.timeline ?? null), [p.segments, p.timeline]);
+  useEffect(() => {
+    let gone = false;
+    const t = setTimeout(() => { api.cues(p.id, JSON.parse(body)).then((c) => { if (!gone) setCues(c); }).catch(() => {}); }, 200);
+    return () => { gone = true; clearTimeout(t); };
+  }, [p.id, body, lines]);
+  return cues;
+}
+
+/** The blurred, slightly darker copy of the picture behind it when the picture does not fill the canvas
+ *  (app/frame.py: boxblur at a quarter size). A second muted video kept in step with the main one. */
+function BackdropVideo({ src, still, main, playing, time, blur, extraFilter }: {
+  src: string; still: boolean; main: RefObject<HTMLVideoElement | null>; playing: boolean; time: number; blur: number; extraFilter?: string;
+}) {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const v = ref.current, m = main.current;
+    if (!v || !m || still) return;
+    if (Math.abs(v.currentTime - m.currentTime) > 0.25) v.currentTime = m.currentTime;
+    v.playbackRate = m.playbackRate;
+  }, [time, main, still]);
+  useEffect(() => {
+    const v = ref.current;
+    if (!v || still) return;
+    if (playing) v.play().catch(() => {}); else v.pause();
+  }, [playing, still, src]);
+  const style: React.CSSProperties = { filter: `${extraFilter ?? ""} blur(${blur.toFixed(1)}px) brightness(0.94)`, transform: "scale(1.08)" };
+  return still
+    // eslint-disable-next-line @next/next/no-img-element
+    ? <img src={src} alt="" className="pointer-events-none absolute inset-0 size-full object-cover" style={style} />
+    : <video ref={ref} src={src} muted playsInline preload="auto" aria-hidden className="pointer-events-none absolute inset-0 size-full object-cover" style={style} />;
+}
+
+/** One burned-in subtitle drawn like libass: bottom-centred, `margin` above the canvas bottom, outline or box. */
+function SubtitleLine({ cue, look, cv, stageH }: { cue: string; look: SubCues; cv: { x: number; y: number; w: number; h: number }; stageH: number }) {
+  const k = cv.w / look.W;
+  const e = look.edge * k;
+  const ring = Array.from({ length: 16 }, (_, i) => {
+    const a = (i / 16) * Math.PI * 2;
+    return `${(Math.cos(a) * e).toFixed(2)}px ${(Math.sin(a) * e).toFixed(2)}px 0 ${look.edge_color}`;
+  });
+  return (
+    <div className="pointer-events-none absolute z-[2] flex justify-center text-center"
+      style={{ left: cv.x + look.side * k, width: cv.w - 2 * look.side * k, bottom: stageH - (cv.y + cv.h) + look.margin * k }}>
+      <span style={{
+        fontFamily: `"${look.font}", "Be Vietnam Pro", sans-serif`, fontWeight: 700, fontSize: look.size * k * ASS_EM,
+        lineHeight: `${look.size * k}px`, color: look.text, whiteSpace: "pre-line", textWrap: "balance",
+        ...(look.box
+          ? { background: look.edge_color, padding: `0 ${e}px`, boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone" }
+          : { textShadow: [...ring, `${(e + k).toFixed(2)}px ${(e + k).toFixed(2)}px 0 rgba(0,0,0,.6)`].join(", ") }),
+      }}>{cue}</span>
     </div>
   );
 }

@@ -34,13 +34,13 @@ def validate(raw, durations: dict[int, float] | None = None) -> list[dict]:
             size = float(o.get("size", 0.06 if kind == "text" else 0.4 if kind == "video" else 0.25))
         except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
             raise ValueError("Có chữ hoặc hình dán không hợp lệ.") from None
-        if kind not in ("text", "image", "video"):
+        if kind not in ("text", "image", "video", "blur"):
             raise ValueError("Loại không hợp lệ.")
         a = max(0.0, a)
         if b - a < MIN_LEN:
             raise ValueError(f"Mỗi chữ/hình dán phải hiện ít nhất {MIN_LEN:g} giây.")
         item = {"id": "", "kind": kind, "start": a, "end": b, "x": min(1.0, max(0.0, x)), "y": min(1.0, max(0.0, y)),
-                "size": round(min(1.0 if kind == "video" else 0.3 if kind == "text" else 0.8, max(0.02, size)), 3)}
+                "size": round(min(1.0 if kind in ("video", "blur") else 0.3 if kind == "text" else 0.8, max(0.02, size)), 3)}
         if kind == "text":
             text = str(o.get("text", "")).strip()[:200]
             if not text:
@@ -48,6 +48,19 @@ def validate(raw, durations: dict[int, float] | None = None) -> list[dict]:
             color = str(o.get("color", "#ffffff"))
             item |= {"text": text, "color": color if _COLOR.match(color) else "#ffffff",
                      "box": bool(o.get("box", False)), "bold": bool(o.get("bold", True))}
+            try:   # seconds the text takes to appear and to go (0 = at once)
+                fade = round(min(1.5, max(0.0, float(o.get("fade") or 0)), (b - a) / 2), 2)
+            except (TypeError, ValueError, OverflowError):
+                fade = 0.0
+            if fade:
+                item["fade"] = fade
+        elif kind == "blur":   # a blurred / pixelated area: size = width, h = height (fractions of the canvas)
+            try:
+                h, strength = float(o.get("h", 0.2)), float(o.get("strength", 50))
+            except (TypeError, ValueError, OverflowError):
+                raise ValueError("Có vùng làm mờ không hợp lệ.") from None
+            item |= {"h": round(min(1.0, max(0.02, h)), 3), "strength": int(min(100, max(5, strength))),
+                     "style": "pixelate" if o.get("style") == "pixelate" else "blur"}
         elif kind == "video":
             try:
                 src, frm = int(o["src"]), max(0.0, float(o.get("from", 0.0)))
@@ -103,5 +116,29 @@ def image_filters(items: list[tuple[str, dict]], v_in: str, W: int, H: int, offs
         out = f"[ovo{k}]"
         parts.append(f"{v}[ovi{k}]overlay=x=main_w*{o['x']:.4f}-overlay_w/2:y=main_h*{o['y']:.4f}-overlay_h/2"
                      f":enable='between(t,{span[0]:.3f},{span[1]:.3f})':format=auto{out}")
+        v = out
+    return parts, v
+
+
+def blur_filters(items: list[dict], v_in: str, W: int, H: int, offset: float, window: float | None) -> tuple[list[str], str]:
+    """Blurred or pixelated rectangles (faces, number plates, an old watermark), each only while it is on."""
+    parts, v = [], v_in
+    for k, o in enumerate(items):
+        span = in_window(o, offset, window)
+        if span is None:
+            continue
+        w = max(8, min(W, int(W * o["size"])) // 2 * 2)
+        h = max(8, min(H, int(H * o.get("h", 0.2))) // 2 * 2)
+        x = int(min(W - w, max(0, W * o["x"] - w / 2)))
+        y = int(min(H - h, max(0, H * o["y"] - h / 2)))
+        s = o.get("strength", 50)
+        if o.get("style") == "pixelate":   # big square blocks
+            cell = max(2, int(min(w, h) * (0.02 + s / 100 * 0.18)))
+            fx = f"scale={max(1, w // cell)}:{max(1, h // cell)},scale={w}:{h}:flags=neighbor"
+        else:
+            fx = f"gblur=sigma={max(1.0, min(w, h) * s / 300):.1f}"
+        out = f"[bzo{k}]"
+        parts.append(f"{v}split[bzm{k}][bzs{k}];[bzs{k}]crop={w}:{h}:{x}:{y},{fx}[bzr{k}];"
+                     f"[bzm{k}][bzr{k}]overlay={x}:{y}:enable='between(t,{span[0]:.3f},{span[1]:.3f})'{out}")
         v = out
     return parts, v

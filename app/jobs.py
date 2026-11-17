@@ -398,6 +398,8 @@ def _render(pid: str, preview_start: float | None):
         p = p | {"settings": p["settings"] | {"audio_mode": "duck", "orig_volume": 1.0}}
     st, media = p["settings"], p["media"]
     dub.mix(d, p["segments"], media["duration"], d / "dub.wav")
+    if dubbed:   # the subtitles change cue where the voice takes a breath
+        p = p | {"segments": dub.with_pauses(d, p["segments"])}
 
     src = d / p["source"]["file"]
     bg = None

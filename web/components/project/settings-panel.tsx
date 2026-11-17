@@ -28,6 +28,7 @@ type Props = {
   qc?: Project["qc"];                          // checks of the last export
   canHw: boolean;                              // this ffmpeg can encode with the Mac's hardware
   previewAt: number;                           // video time used for the still preview
+  media?: { width: number; height: number } | null;   // size of the main video (where the picture can be moved)
   subStyles: Record<string, string>;
   reviewStyles: Record<string, string>;
   targetLangs: Record<string, { label: string; voice: string }>;
@@ -49,7 +50,7 @@ export const SECTION_IDS = ["dub", "audio", "subs", "look", "export"] as const;
 export type SectionId = (typeof SECTION_IDS)[number];
 
 export function SettingsPanel({
-  projectId, section, handle, sourceLangs, langLocked, onDub, qc, canHw, previewAt, subStyles, reviewStyles, targetLangs, translatedTo,
+  projectId, section, handle, sourceLangs, langLocked, onDub, qc, canHw, previewAt, media, subStyles, reviewStyles, targetLangs, translatedTo,
   settings, voices, canDemucs, disabled, busy, onDraft, onSave, maskDetect, onDetect,
 }: Props) {
   const [detecting, setDetecting] = useState(false);
@@ -210,7 +211,7 @@ export function SettingsPanel({
       </Section></div>
 
       <div {...show("export")}><ExportSection s={s} canHw={canHw} disabled={disabled} change={change} qc={qc} /></div>
-      <div {...show("look")}><FrameSection s={s} disabled={disabled} change={change} preview={null} /></div>
+      <div {...show("look")}><FrameSection s={s} disabled={disabled} change={change} preview={null} media={media} /></div>
       <div {...show("look")}><ColorSection s={s} disabled={disabled} change={change} /></div>
       <div {...show("look")}><LogoSection s={s} disabled={disabled} change={change} /></div>
 

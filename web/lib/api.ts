@@ -31,7 +31,11 @@ export type Settings = {
   sub_margin: number;
   music: { track: string | null; volume: number; duck: boolean; start: number };
   mask: { enabled: boolean; auto: boolean; style: "blur" | "box"; bottom: number; height: number };
-  frame: { aspect: "original" | "9:16" | "16:9" | "1:1" | "4:5"; fit: "blur" | "crop"; zoom: number };
+  frame: {
+    aspect: "original" | "9:16" | "16:9" | "1:1" | "4:5"; fit: "blur" | "crop"; zoom: number;
+    x: number; y: number;                       // move the picture, -1 .. 1, where there is room
+    bg: "blur" | "color" | "image"; blur: number; bg_color: string; bg_image: string | null;   // around the picture
+  };
   color: { brightness: number; contrast: number; saturation: number; temperature: number; sharpness: number; vignette: number };
   logo: { image: string | null; text: string; position: "tl" | "tr" | "bl" | "br"; x: number | null; y: number | null; size: number; opacity: number };
   export: { quality: "fast" | "balanced" | "high"; hw: boolean; loudnorm: boolean };
@@ -46,7 +50,7 @@ export type Logo = { id: string; name: string; file: string };
 /** Text or picture laid over the exported video; times are seconds of the EDITED video. */
 export type Overlay = {
   id: string;
-  kind: "text" | "image" | "video";
+  kind: "text" | "image" | "video" | "blur";
   start: number;
   end: number;
   x: number;          // centre, 0..1 of the width
@@ -56,11 +60,15 @@ export type Overlay = {
   color?: string;     // #rrggbb
   box?: boolean;      // dark box behind the letters
   bold?: boolean;
+  fade?: number;      // text: seconds to appear and to go
   image?: string;     // id in the logo library
   src?: number;       // video: which video of the project (0 = the main one)
   from?: number;      // video: second of that video where it starts playing
   opacity?: number;   // video: 0.1 .. 1
   volume?: number;    // video: its own sound, 0 .. 1
+  h?: number;         // blur: height, fraction of the canvas (size is the width)
+  strength?: number;  // blur: 5 .. 100
+  style?: "blur" | "pixelate";
 };
 
 export type Stage =
@@ -137,6 +145,8 @@ export type SavedCopy = { path?: string; error?: string; at: number };
 export type AppSettings = {
   openai_key_set: boolean;
   openai_key_hint: string;
+  gpt_model: string;                                  // model that translates and writes captions
+  gpt_models: string[];
   stt_engine: string;
   stt_model_ready: boolean;
   stt_cpu: boolean;                                   // recognition runs on the CPU (Windows / Intel): its speed depends on the model
@@ -158,6 +168,13 @@ export type UpdateState = {
   current: string;
   enabled: boolean;
   last_failed?: string;
+};
+
+/** The burned-in subtitles as the export draws them (output canvas pixels, output time). */
+export type SubCues = {
+  W: number; H: number; size: number; margin: number; side: number; edge: number;
+  box: boolean; text: string; edge_color: string; font: string;
+  cues: { a: number; b: number; t: string }[];
 };
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -190,8 +207,10 @@ const P = (id: string) => `/api/projects/${id}`;
 export const api = {
   config: () => req<Config>("/api/config"),
   appSettings: () => req<AppSettings>("/api/app-settings"),
-  saveAppSettings: (patch: { openai_key?: string; output_dir?: string; stt_model?: string }) =>
+  saveAppSettings: (patch: { openai_key?: string; gpt_model?: string; output_dir?: string; stt_model?: string }) =>
     req<AppSettings>("/api/app-settings", { method: "PUT", body: patch }),
+  freeze: (id: string, src: number, t: number) => req<Project>(`${P(id)}/freeze`, { method: "POST", body: { src, t } }),
+  cues: (id: string, settings: Partial<Settings>) => req<SubCues>(`${P(id)}/cues`, { method: "POST", body: settings }),
   vieneuDownload: () => req<AppSettings["vieneu"]>("/api/vieneu/download", { method: "POST" }),
   updateState: (force = false) => req<UpdateState>(`/api/update${force ? "?force=1" : ""}`),
   updateApply: () => req<UpdateState>("/api/update/apply", { method: "POST" }),

@@ -1,24 +1,18 @@
 """TTS per line, fit each line into its time slot, and mix the dub track."""
 
-import asyncio
 import hashlib
 import threading
 import time
 from pathlib import Path
 
-import edge_tts
 import numpy as np
 import soundfile as sf
 
-from .config import (
-    DATA_DIR, FFMPEG, MAX_ATEMPO, MAX_EDGE_SPEEDUP,
-    OPENAI_TTS_MODEL, SAMPLE_RATE, openai_key, target_info,
-)
+from .config import DATA_DIR, FFMPEG, MAX_ATEMPO, MAX_VOICE_SPEEDUP, SAMPLE_RATE, target_info
 from . import cancel
 from .media import decode_mono, trim_silence
 
 OVERLAP_TOL = 0.12   # seconds a line may run past its slot (the next line starts under its tail); the tail is faded
-_edge_sem = threading.Semaphore(4)  # edge-tts is an unofficial endpoint; be gentle
 
 
 def slot(segs: list[dict], i: int, duration: float) -> float:
@@ -38,7 +32,7 @@ def classify(speech_secs: float, slot_secs: float, speed: float = 1.0) -> dict:
     speech_secs: length at the user's chosen rate (before per-line speed-up).
     """
     need = speech_secs / (slot_secs + OVERLAP_TOL) if slot_secs > 0 else 99   # a line may run a hair into the next one
-    max_speed = MAX_EDGE_SPEEDUP * MAX_ATEMPO
+    max_speed = MAX_VOICE_SPEEDUP * MAX_ATEMPO
     if need <= 1.02:
         status = "ok"
     elif need <= max_speed:
@@ -53,34 +47,7 @@ def estimate(text: str, slot_secs: float, rate: float, target: str = "vi") -> di
     return classify(secs, slot_secs) | {"estimated": True}
 
 
-def _rate_str(r: float) -> str:
-    return f"{round((r - 1) * 100):+d}%"
-
-
-# language-neutral on purpose: the voice reads whatever language the text is in
-_OPENAI_TTS_INSTRUCTIONS = ("Read the text in its own language like a native speaker: natural, clear, the voice of a "
-                            "short-video dub, not too slow.")
-_openai_client = None
-_openai_client_key = ""
-
-
-def _synth_openai(text: str, name: str, rate: float, out: Path) -> None:
-    global _openai_client, _openai_client_key
-    from openai import OpenAI
-
-    key = openai_key()
-    if not key:
-        raise RuntimeError("Giọng OpenAI cần OpenAI API key. Nhập key trong Cài đặt (biểu tượng bánh răng), "
-                           "hoặc chọn giọng miễn phí như Chị Google.")
-    if _openai_client is None or key != _openai_client_key:
-        _openai_client, _openai_client_key = OpenAI(api_key=key, max_retries=2, timeout=60), key
-    r = _openai_client.audio.speech.create(
-        model=OPENAI_TTS_MODEL, voice=name, input=text, instructions=_OPENAI_TTS_INSTRUCTIONS,
-        response_format="mp3", speed=min(4.0, max(0.25, rate)))
-    out.write_bytes(r.content)
-
-
-# Engines without a speed setting: fetch once at 1.0x (cached, so speed-up retries cost nothing),
+# Neither engine has a speed setting: fetch once at 1.0x (cached, so speed-up retries cost nothing),
 # then change the tempo with ffmpeg.
 _CACHE = DATA_DIR.parent / "tts_cache"
 
@@ -155,31 +122,7 @@ def _synth(text: str, voice: str, rate: float, out: Path) -> None:
                 last = e
                 time.sleep(1.5 * (attempt + 1))
         raise RuntimeError(f"Google TTS lỗi: {last}")
-    if voice.startswith("openai:"):
-        try:
-            return _synth_openai(text, voice.split(":", 1)[1], rate, out)
-        except Exception as e:
-            raise RuntimeError(f"OpenAI TTS lỗi: {type(e).__name__}: {str(e)[:200]}")
-
-    async def go():
-        # hard cap: a half-open websocket can stall forever despite edge-tts' own receive timeout
-        limit = 30 + len(text) / 10
-        await asyncio.wait_for(
-            edge_tts.Communicate(text, voice, rate=_rate_str(rate), connect_timeout=10, receive_timeout=20).save(str(out)),
-            timeout=limit)
-
-    last = None
-    for attempt in range(3):
-        if attempt:
-            time.sleep(1.5 * attempt)
-        try:
-            with _edge_sem:
-                asyncio.run(go())
-            if out.exists() and out.stat().st_size > 0:
-                return
-        except Exception as e:
-            last = e
-    raise RuntimeError(f"Edge TTS lỗi: {last}")
+    raise RuntimeError(f"Không có giọng {voice!r}. Chọn lại giọng trong phần Giọng đọc.")
 
 
 def synth(text: str, voice: str, rate: float, out: Path) -> None:
@@ -201,11 +144,11 @@ def make_line(proj_dir: Path, seg: dict, slot_secs: float, voice: str, rate: flo
     speed = 1.0
 
     if fit["status"] != "ok":
-        # 1) re-synthesize faster: sounds more natural than time-stretching
-        edge_speed = min(MAX_EDGE_SPEEDUP, fit["need"] * 1.03)
-        _synth(text, voice, rate * edge_speed, raw)
+        # 1) read it faster
+        read_speed = min(MAX_VOICE_SPEEDUP, fit["need"] * 1.03)
+        _synth(text, voice, rate * read_speed, raw)
         audio = trim_silence(decode_mono(raw))
-        speed = edge_speed
+        speed = read_speed
         # 2) still long: time-stretch the remainder
         over = (audio.size / SAMPLE_RATE) / (slot_secs + OVERLAP_TOL)
         if over > 1.02:
@@ -234,6 +177,52 @@ def make_line(proj_dir: Path, seg: dict, slot_secs: float, voice: str, rate: flo
         },
         "fit": fit,
     }
+
+
+def pauses(x: np.ndarray, rel_db: float = 22.0, min_len: float = 0.06) -> list[tuple[float, float]]:
+    """Breaths inside a spoken line: (from, to) in seconds. "Quiet" is measured against the clip's own speech
+    level, because a sped-up line has short pauses and not every engine leaves digital silence."""
+    win = int(SAMPLE_RATE * 0.01)
+    n = x.size // win
+    if n < 3:
+        return []
+    rms = 20 * np.log10(np.sqrt(np.mean(x[: n * win].reshape(n, win) ** 2, axis=1)) + 1e-6)
+    ref = float(np.median(rms[rms > rms.max() - 30]))
+    quiet = rms < ref - rel_db
+    out, k = [], 0
+    while k < n:
+        if not quiet[k]:
+            k += 1
+            continue
+        j = k
+        while j < n and quiet[j]:
+            j += 1
+        if k > 0 and j < n and (j - k) * 0.01 >= min_len:   # not the clip's own head or tail
+            out.append((round(k * 0.01, 2), round(j * 0.01, 2)))
+        k = j
+    return out
+
+
+_pause_cache: dict[tuple[str, float], list] = {}
+
+
+def with_pauses(proj_dir: Path, segs: list[dict]) -> list[dict]:
+    """Copies of the lines with `_pauses` (the breaths in each line's voice clip), for the subtitle timing.
+    Read from the clip files, so lines voiced by an older version get them too. Nothing is saved."""
+    out = []
+    for s in segs:
+        f = proj_dir / s["tts"]["file"] if s.get("tts") else None
+        if f is None or not f.exists():
+            out.append(s)
+            continue
+        key = (str(f), f.stat().st_mtime)
+        if key not in _pause_cache:   # the live preview asks again on every change: read each clip once
+            if len(_pause_cache) > 5000:
+                _pause_cache.clear()
+            clip, _ = sf.read(f, dtype="float32")
+            _pause_cache[key] = pauses(clip if clip.ndim == 1 else clip.mean(axis=1))
+        out.append(s | {"_pauses": _pause_cache[key]})
+    return out
 
 
 def needs_tts(seg: dict, voice: str, rate: float) -> bool:

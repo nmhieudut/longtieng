@@ -25,7 +25,7 @@ import { TimelinePanel, type TimelineHandle } from "./timeline-panel";
 import { useClipPlayback } from "./use-clip-playback";
 import { newEditLog } from "./edit-log";
 import { useOverlays } from "./use-overlays";
-import { type Clip, type Crop, isGap, locate, mapLines, srcOf, totalLen } from "@/lib/timeline";
+import { type Clip, type Crop, isGap, layout, len, locate, mapLines, srcOf, totalLen } from "@/lib/timeline";
 import { useTimeline } from "./use-timeline";
 import { VideoPanel, type VideoView } from "./video-panel";
 
@@ -263,6 +263,16 @@ export function ProjectView({ id }: { id: string }) {
 
   const busy = isActive(p);
   const settings = draft ?? p.settings;
+  /** A line clicked on a timeline: open the lines list on it (focus: put the cursor in it to type). */
+  const editLine = (sid: number, focus: boolean) => {
+    setTab("dub");
+    setDubView("lines");
+    setTimeout(() => {
+      const row = document.querySelector<HTMLElement>(`[data-sid="${sid}"]`);
+      row?.scrollIntoView({ block: "center", behavior: "smooth" });
+      if (focus) row?.querySelector("textarea")?.focus({ preventScroll: true });
+    }, 60);
+  };
   const previewAt = view === "preview" || loadedSrc !== 0 ? 0 : time;   // main video time (still preview, cover)
   const outAt = view === "preview" ? 0 : tl.edited && view === "source" ? clipPlay.T : time;  // output time (30 s preview)
   const fresh = p.status.stage === "new" && p.segments.length === 0;
@@ -337,6 +347,7 @@ export function ProjectView({ id }: { id: string }) {
               activeIdx={activeIdx}
               mask={settings.mask}
               color={settings.color}
+              look={settings}
               overlays={view === "source" ? overlays.items : []}
               logo={settings.logo}
               onMoveLogo={(x, y) => putDraft({ ...settings, logo: { ...settings.logo, x, y } })}
@@ -345,7 +356,9 @@ export function ProjectView({ id }: { id: string }) {
               selectedOverlay={logoSel ? "logo" : selOv}
               editable={!locked}
               onSelectOverlay={(id) => { setLogoSel(id === "logo"); if (id === "logo") { setSelOv(null); setTab("look"); } else { setSelOv(id); if (id) setTab("props"); } }}
-              onResizeOverlay={(id, size) => overlays.change(overlays.items.map((o) => (o.id === id ? { ...o, size: +size.toFixed(3) } : o)), { key: `size${id}` })}
+              onResizeOverlay={(id, size) => overlays.change(overlays.items.map((o) => (o.id !== id ? o
+                : o.kind === "blur" ? { ...o, size: +size.toFixed(3), h: +Math.min(1, (o.h ?? 0.2) * size / o.size).toFixed(3) }   // keeps its shape
+                : { ...o, size: +size.toFixed(3) })), { key: `size${id}` })}
               onEditText={(id, text) => overlays.change(overlays.items.map((o) => (o.id === id ? { ...o, text } : o)), { key: `text${id}` })}
               onAddText={() => tlRef.current?.addText()}
               onAddSticker={() => tlRef.current?.addSticker()}
@@ -359,7 +372,8 @@ export function ProjectView({ id }: { id: string }) {
               gap={view === "source" && clipPlay.inGap}
               stillImage={view === "source" && clipPlay.inGap && imgFile ? fileUrl(p.id, imgFile) : null}
               stillDims={imgInfo ? { w: imgInfo.width, h: imgInfo.height } : null}
-              fx={curClip ? { crop: curClip.crop, rotate: curClip.rotate, flip: curClip.flip } : null}
+              fx={curClip ? { crop: curClip.crop, rotate: curClip.rotate, flip: curClip.flip, color: curClip.color, motion: curClip.motion,
+                progress: (() => { const r = layout(tl.clips)[clipPlay.idx]; return r ? Math.min(1, Math.max(0, (clipPlay.T - r.at) / Math.max(0.01, len(r.clip)))) : 0; })() } : null}
               cropMode={cropMode && (!clipPlay.inGap || !!imgFile) && !locked}
               onCrop={(c: Crop | null) => tl.tweak(tl.clips.map((x, i) => (i === clipPlay.idx ? (c ? { ...x, crop: c } : { ...x, crop: undefined }) : x)), `crop${clipPlay.idx}`)}
               volume={volume}
@@ -369,6 +383,7 @@ export function ProjectView({ id }: { id: string }) {
               onTogglePlay={togglePlay}
               scrub={view === "source" && tl.edited ? { value: clipPlay.T, max: totalLen(tl.clips), seek: clipPlay.seekOut } : undefined}
               onSeek={seek}
+              onEditLine={editLine}
               onTime={setTime}
               onLoaded={onLoaded}
             />
@@ -415,6 +430,7 @@ export function ProjectView({ id }: { id: string }) {
                 handle={tlRef}
                 cropMode={cropMode}
                 onCropMode={setCropMode}
+                onEditLine={editLine}
                 selOv={selOv}
                 setSelOv={setSelOv}
                 inspectorHost={inspectorHost}
@@ -497,6 +513,7 @@ export function ProjectView({ id }: { id: string }) {
                 qc={p.qc}
                 onDub={() => run(async () => { await flushAll(); return p.status.stage === "error" && !p.segments.length ? api.retry(id) : p.segments.length ? api.rewrite(id) : api.start(id, false); })}
                 previewAt={previewAt}
+                media={p.media}
                 subStyles={cfg?.sub_styles ?? {}}
                 reviewStyles={cfg?.review_styles ?? {}}
                 targetLangs={cfg?.target_langs ?? {}}

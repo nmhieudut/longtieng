@@ -31,7 +31,25 @@ GAP = -1         # `src` of a blank clip: black picture, silence ("khoảng tr�
 MAX_GAP = 60.0
 MIN_CROP = 0.1   # smallest crop side, as a fraction of the picture
 PROP_DEFAULTS = {"src": 0, "speed": 1.0, "volume": 1.0, "fade_in": 0.0, "fade_out": 0.0, "transition": 0.0,
-                 "crop": None, "rotate": 0, "flip": False}
+                 "crop": None, "rotate": 0, "flip": False, "color": None, "motion": None}
+MOTION_ZOOM = 0.15   # a slow zoom ("Ken Burns") goes from 100 % to 115 % over the clip, or back
+COLOR_KEYS = {"brightness": (-100, 100), "contrast": (-100, 100), "saturation": (-100, 100), "temperature": (-100, 100),
+              "sharpness": (0, 100), "vignette": (0, 100)}
+
+
+def _clean_color(raw) -> dict | None:
+    """A clip's own colour (same sliders as the whole-video colour); None when nothing is changed."""
+    if not isinstance(raw, dict):
+        return None
+    out = {}
+    for k, (lo, hi) in COLOR_KEYS.items():
+        try:
+            v = int(min(hi, max(lo, float(raw.get(k) or 0))))
+        except (TypeError, ValueError, OverflowError):
+            v = 0
+        if v:
+            out[k] = v
+    return out or None
 
 
 def speed(c: dict) -> float:
@@ -124,6 +142,11 @@ def validate(raw, duration: float, durations: dict[int, float] | None = None, ma
             item["rotate"] = int(c["rotate"]) % 360
         if c.get("flip"):
             item["flip"] = True
+        color = _clean_color(c.get("color"))
+        if color and not is_gap(item):
+            item["color"] = color
+        if c.get("motion") in ("in", "out") and not is_gap(item):
+            item["motion"] = c["motion"]
         out.append(item)
     if max_total is not None and out_duration(out) > max_total:
         raise ValueError(f"Video sau khi chỉnh dài {out_duration(out) / 60:.1f} phút, vượt giới hạn {max_total / 60:g} phút.")
@@ -285,7 +308,9 @@ def build_edit(proj_dir: Path, p: dict, clips: list[dict], on_progress=None) -> 
     n = len(clips)
     # another video can have another size, frame rate, no sound: bring every clip to the main video's format
     crossfades = any(trans(clips, i) > 0 for i in range(n))
-    mixed = any(c.get("src", 0) != 0 for c in clips) or crossfades or any(transformed(c) for c in clips)  # xfade needs identical size, fps and sound format
+    # (a slow zoom makes its frames at a set rate, so every clip is brought to that rate)
+    mixed = (any(c.get("src", 0) != 0 for c in clips) or crossfades or any(transformed(c) for c in clips)
+             or any(c.get("motion") for c in clips))  # xfade needs identical size, fps and sound format
     fps = _fps(proj_dir / p["source"]["file"]) if mixed else 30.0
     chains, ins = [], n  # `ins` = next free input index (silence for videos without sound goes after the clips)
     for i, c in enumerate(clips):
@@ -298,10 +323,19 @@ def build_edit(proj_dir: Path, p: dict, clips: list[dict], on_progress=None) -> 
             vf += {90: ["transpose=1"], 180: ["hflip", "vflip"], 270: ["transpose=2"]}[int(c["rotate"])]
         if c.get("flip"):
             vf.append("hflip")
+        if c.get("color"):   # this clip's own colour, before the framing (the blurred background gets it too)
+            from .render import color_parts
+            vf += color_parts(c["color"])
         if mixed:
             fit = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}" if cr
                    else f"scale={W}:{H}:force_original_aspect_ratio=decrease")
             vf += [fit] + ([] if cr else [f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2"]) + ["setsar=1", f"fps={fps:.3f}", "format=yuv420p"]
+        if c.get("motion"):   # slow zoom to / from the centre; drawn at twice the size so it moves smoothly
+            n_frames = max(1, round((c["end"] - c["start"]) * fps))
+            prog = f"on/{n_frames}" if c["motion"] == "in" else f"(1-on/{n_frames})"
+            vf += [f"scale={2 * W}:{2 * H}",
+                   f"zoompan=z='1+{MOTION_ZOOM}*{prog}':x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2':d=1:s={W}x{H}:fps={fps:.3f}",
+                   "setsar=1"]
         vf.append("setpts=(PTS-STARTPTS)" + (f"/{k:.4f}" if k != 1 else ""))
         if c.get("fade_in"):
             vf.append(f"fade=t=in:st=0:d={c['fade_in']:.2f}")

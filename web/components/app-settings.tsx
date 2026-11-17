@@ -120,7 +120,7 @@ export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
             </p>
           ) : (
             <p className="text-sm text-muted-foreground">
-              Chưa có key: dịch bằng Google (kém tự nhiên hơn), không có caption AI và giọng OpenAI.
+              Chưa có key: dịch bằng Google (kém tự nhiên hơn), không có caption AI.
             </p>
           )}
           <form
@@ -146,6 +146,21 @@ export function AppSettingsButton({ onChanged }: { onChanged?: () => void }) {
             )}
           </div>
           <p className="text-xs text-muted-foreground">Key chỉ lưu trên máy này, không gửi đi đâu ngoài OpenAI.</p>
+          {info?.openai_key_set && (
+            <div className="grid gap-1.5 pt-1">
+              <Label className="text-xs text-muted-foreground">Model dịch và viết caption</Label>
+              <Select value={info.gpt_model}
+                onValueChange={async (v) => {
+                  try { setInfo(await api.saveAppSettings({ gpt_model: v })); toast.success(`Đã chọn ${v}. Áp dụng từ lần dịch sau.`); onChanged?.(); }
+                  catch (e) { toast.error((e as Error).message); }
+                }}>
+                <SelectTrigger className="w-full font-mono text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {info.gpt_models.map((m) => <SelectItem key={m} value={m} className="font-mono text-xs">{m}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
 
         <div className="grid gap-2 border-t pt-4">

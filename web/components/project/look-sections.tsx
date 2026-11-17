@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { api, type DeepPartial, type Logo, logoUrl, type Project, type Settings } from "@/lib/api";
 import { COLOR_PRESETS, COLOR_ZERO, colorIsDefault, sameColor } from "@/lib/color";
+import { geom } from "@/lib/frame";
 import { cn } from "@/lib/utils";
 
 import { Field, Section, SliderField } from "./settings-ui";
@@ -30,15 +31,25 @@ const ASPECTS: { value: Settings["frame"]["aspect"]; label: string; box: string 
 ];
 
 /** Output framing: aspect ratio, how to fill it, zoom. */
-export function FrameSection({ s, disabled, change, preview }: {
-  s: Settings; disabled: boolean; change: Change; preview: React.ReactNode;
+export function FrameSection({ s, disabled, change, preview, media }: {
+  s: Settings; disabled: boolean; change: Change; preview: React.ReactNode; media?: { width: number; height: number } | null;
 }) {
   const fr = s.frame;
+  const g = media ? geom(media.width, media.height, fr) : null;
+  const room = { x: !!g && g.sw !== g.W, y: !!g && g.sh !== g.H };   // where the picture can be moved
+  const [library, setLibrary] = useState<Logo[] | null>(null);
+  const bgFile = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (fr.bg === "image" && library === null) api.logoList().then(setLibrary).catch(() => setLibrary([])); }, [fr.bg, library]);
+  async function uploadBg(f: File | undefined) {
+    if (!f) return;
+    try { const item = await api.logoUpload(f); setLibrary((xs) => [...(xs ?? []), item]); change({ frame: { bg: "image", bg_image: item.id } }); }
+    catch (e) { toast.error((e as Error).message); }
+  }
   const label = ASPECTS.find((a) => a.value === fr.aspect)?.label ?? fr.aspect;
   return (
     <Section value="frame" icon={<Crop />} title="Khung hình"
       summary={fr.aspect === "original" && fr.zoom <= 1 ? "Giữ nguyên" :
-        `${label}${fr.aspect !== "original" ? (fr.fit === "blur" ? " · nền mờ" : " · cắt khung") : ""}${fr.zoom > 1 ? ` · zoom ${Math.round(fr.zoom * 100)}%` : ""}`}>
+        `${label}${fr.aspect !== "original" ? (fr.fit === "blur" ? ({ blur: " · nền mờ", color: " · nền màu", image: " · nền ảnh" } as const)[fr.bg ?? "blur"] : " · cắt khung") : ""}${fr.zoom > 1 ? ` · zoom ${Math.round(fr.zoom * 100)}%` : ""}`}>
       <div className="grid grid-cols-5 gap-1.5" role="radiogroup" aria-label="Tỉ lệ khung">
         {ASPECTS.map((a) => (
           <button key={a.value} type="button" role="radio" aria-checked={fr.aspect === a.value} disabled={disabled}
@@ -53,12 +64,64 @@ export function FrameSection({ s, disabled, change, preview }: {
       {fr.aspect !== "original" && (
         <ToggleGroup type="single" variant="outline" className="w-full" disabled={disabled}
           value={fr.fit} onValueChange={(v) => v && change({ frame: { fit: v as "blur" | "crop" } })}>
-          <ToggleGroupItem value="blur" className="flex-1">Nền mờ (giữ đủ hình)</ToggleGroupItem>
+          <ToggleGroupItem value="blur" className="flex-1">Giữ đủ hình (có nền)</ToggleGroupItem>
           <ToggleGroupItem value="crop" className="flex-1">Cắt cho đầy khung</ToggleGroupItem>
         </ToggleGroup>
       )}
       <SliderField label="Phóng to" value={fr.zoom} min={1} max={2} step={0.05} disabled={disabled}
         show={(v) => `${Math.round(v * 100)}%`} onChange={(v) => change({ frame: { zoom: v } })} />
+      {(room.x || room.y) && (
+        <>
+          {room.x && <SliderField label="Vị trí ngang" value={fr.x ?? 0} min={-1} max={1} step={0.02} disabled={disabled}
+            show={(v) => (Math.abs(v) < 0.01 ? "giữa" : v < 0 ? `trái ${Math.round(-v * 100)}%` : `phải ${Math.round(v * 100)}%`)} onChange={(v) => change({ frame: { x: v } })} />}
+          {room.y && <SliderField label="Vị trí dọc" value={fr.y ?? 0} min={-1} max={1} step={0.02} disabled={disabled}
+            show={(v) => (Math.abs(v) < 0.01 ? "giữa" : v < 0 ? `lên ${Math.round(-v * 100)}%` : `xuống ${Math.round(v * 100)}%`)} onChange={(v) => change({ frame: { y: v } })} />}
+          {(fr.x || fr.y) ? (
+            <button type="button" disabled={disabled} onClick={() => change({ frame: { x: 0, y: 0 } })}
+              className="justify-self-start text-xs text-primary underline underline-offset-2">Về giữa</button>
+          ) : null}
+        </>
+      )}
+      {g?.blur && (
+        <Field label="Nền quanh video">
+          <ToggleGroup type="single" variant="outline" className="w-full" disabled={disabled}
+            value={fr.bg ?? "blur"} onValueChange={(v) => v && change({ frame: { bg: v as Settings["frame"]["bg"] } })}>
+            <ToggleGroupItem value="blur" className="flex-1">Mờ</ToggleGroupItem>
+            <ToggleGroupItem value="color" className="flex-1">Màu</ToggleGroupItem>
+            <ToggleGroupItem value="image" className="flex-1">Ảnh</ToggleGroupItem>
+          </ToggleGroup>
+          {(fr.bg ?? "blur") === "blur" && (
+            <SliderField label="Độ mờ" value={fr.blur ?? 40} min={5} max={100} step={1} disabled={disabled}
+              show={(v) => `${Math.round(v)}`} onChange={(v) => change({ frame: { blur: Math.round(v) } })} />
+          )}
+          {fr.bg === "color" && (
+            <div className="flex flex-wrap items-center gap-1.5 p-1">
+              {["#000000", "#ffffff", "#111827", "#1e3a8a", "#7f1d1d", "#14532d", "#f59e0b", "#ec4899"].map((c) => (
+                <button key={c} type="button" aria-label={`Nền ${c}`} disabled={disabled} onClick={() => change({ frame: { bg_color: c } })}
+                  className={cn("size-7 rounded-full border", fr.bg_color === c && "ring-2 ring-primary ring-offset-1")} style={{ background: c }} />
+              ))}
+              <input type="color" aria-label="Chọn màu nền khác" disabled={disabled} value={fr.bg_color ?? "#000000"}
+                onChange={(e) => change({ frame: { bg_color: e.target.value } })} className="size-7 cursor-pointer rounded border bg-transparent p-0" />
+            </div>
+          )}
+          {fr.bg === "image" && (
+            <div className="flex flex-wrap items-center gap-2 p-1">
+              {library?.map((x) => (
+                <button key={x.id} type="button" disabled={disabled} title={x.name} onClick={() => change({ frame: { bg_image: x.id } })}
+                  className={cn("size-14 overflow-hidden rounded-lg border", fr.bg_image === x.id && "ring-2 ring-primary")}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={logoUrl(x.id)} alt={x.name} className="size-full object-cover" />
+                </button>
+              ))}
+              <button type="button" disabled={disabled} onClick={() => bgFile.current?.click()} aria-label="Tải ảnh nền lên"
+                className="grid size-14 place-items-center rounded-lg border border-dashed text-muted-foreground hover:bg-muted"><ImagePlus className="size-4" /></button>
+              <input ref={bgFile} type="file" hidden accept="image/png,image/jpeg,image/webp"
+                onChange={(e) => { uploadBg(e.target.files?.[0]); e.target.value = ""; }} />
+              {!fr.bg_image && <p className="w-full text-[11px] text-muted-foreground">Chọn hoặc tải một ảnh lên; ảnh được phóng cho đầy khung.</p>}
+            </div>
+          )}
+        </Field>
+      )}
       {preview}
     </Section>
   );
